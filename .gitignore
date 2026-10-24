@@ -16,3 +16,6 @@ build/
 
 # WSL Windows-ADS leak from editing via /mnt/c
 *:Zone.Identifier
+
+# serena tool-local project config
+.serena/
