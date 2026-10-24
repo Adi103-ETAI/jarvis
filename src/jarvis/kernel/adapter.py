@@ -196,6 +196,16 @@ class Kernel:
             out = [r for r in out if r.get("sessionID") == session_id]
         return out
 
+    def session_permission_requests(self, session_id: str) -> list[dict]:
+        """GET /api/session/{sid}/permission — THE live permission queue (2.1.4).
+
+        In kernel 2.1.4 the global endpoint stays empty; pending permission
+        requests surface here, per session. Action name is the runtime one
+        ("shell"), and resources contain the actual command. save[] lists
+        patterns the user may blanket-store ("always").
+        """
+        return self._data(self._request("GET", f"/api/session/{session_id}/permission")) or []
+
     def reply_permission(self, session_id: str, request_id: str,
                          decision: str, *, message: Optional[str] = None) -> None:
         """POST /api/session/{sid}/permission/{rid}/reply — decision: once|always|reject.

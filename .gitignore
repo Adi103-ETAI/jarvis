@@ -19,3 +19,6 @@ build/
 
 # serena tool-local project config
 .serena/
+
+# jarvis runtime state
+.jarvis/

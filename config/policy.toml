@@ -1,0 +1,49 @@
+# JARVIS gate policy — human-readable rules. First match wins.
+# Philosophy (agreed 2026-10-24): keep the kernel's own permission asks;
+# JARVIS auto-runs only clearly-benign commands and puts the human in the
+# loop for everything else. Ambient speech can never mutate the machine.
+
+version = 1
+
+# Commands that may run WITHOUT asking the human (fully audited in the log).
+[[benign.shell]]
+pattern = '^\s*(echo|ls|cat|pwd|whoami|date|hostname|uname|head|tail|wc|which|file|stat|du|df)\b'
+note = "read-only inspection"
+
+[[benign.shell]]
+pattern = '^\s*git (status|log|diff( --stat)?|show|branch|remote( -v)?|blame)\b'
+note = "read-only git inspection"
+
+[[benign.shell]]
+pattern = '^\s*python3 -c .*(print|len|sum|min|max)\b'
+note = "tiny pure-computation snippets"
+
+# NEVER runnable by JARVIS, from any trust level, even after a confirm.
+[[forbiddens]]
+pattern = '(^|[;&|]\s*)rm\s+(-[a-zA-Z]+\s+)*-[a-zA-Z]*r[a-zA-Z]*f|(^|[;&|]\s*)rm\s+-[a-zA-Z]*f[a-zA-Z]*r'
+note = "recursive/forced rm"
+
+[[forbiddens]]
+pattern = '\b(mkfs|mkfs\.\w+|shutdown|reboot|poweroff|halt|fdisk|parted|dd\b[^|;]*\bof=/dev/)\b'
+note = "system-destructive commands"
+
+[[forbiddens]]
+pattern = '(^|\s)>\s*/dev/sd[a-z]|\bchmod\s+-R\s+000\s+/\b'
+note = "raw device damage"
+
+# What a mutating request does, per trust level of the prompt that caused it.
+# mutating = deny | confirm | once
+[trust.console]
+mutating = "confirm"      # typed by you: ask before mutating (with a one-time code)
+
+[trust.ambient]
+mutating = "deny"         # overheard/fallback-parsed speech: may NEVER mutate
+
+[trust.peer]
+mutating = "confirm"      # later: routed through bus escalation to a human
+
+[trust.scheduled]
+mutating = "confirm"      # standing jobs still confirm; once you trust the loop, flip specific jobs
+
+# Runtime action names (kernel 2.1.4 uses shell, NOT bash)
+mutating_actions = ["shell", "edit", "write", "webfetch", "external_directory", "task"]
