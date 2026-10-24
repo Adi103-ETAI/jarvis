@@ -8,20 +8,22 @@ A personal AI assistant built as an **active layer on top of the OpenCode kernel
 
 ## Status
 
-Phase 0 — kernel substrate. See:
+Phase 1 — kernel adapter complete (tests live, 11/11). See:
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the approved architecture
 - [`docs/phase0-baseline.md`](docs/phase0-baseline.md) — live-verified Phase 0 findings
+- [`docs/phase1-kernel-adapter.md`](docs/phase1-kernel-adapter.md) — Phase 1 record + kernel behaviors
 - [`docs/opencode-api.lock.json`](docs/opencode-api.lock.json) — the locked API surface
-- Realities corrected vs. architecture: see `docs/phase0-baseline.md` §6
 
 ## Current state
 
-- OpenCode `v2.1.4` pinned, live at `http://127.0.0.1:49374`, password from `~/.config/opencode/service.json`
-- `serena` MCP: connected
-- `rea` MCP: registered, **disabled** (enabled only after Gate B policy tests)
-- Feynman `0.5.57`: shim fixed (version-agnostic), alphaXiv auth ok
-- OpenCode voice: investigated, **ruled out** — voice stays in the active layer
+- OpenCode `v2.1.4` pinned, live at `http://127.0.0.1:49374`
+- Kernel adapter: `src/jarvis/kernel/adapter.py` — sessions, prompt, steer,
+  interrupt, permissions, fork, compact, events, model ops (stdlib only)
+- Live integration tests: `tests/test_adapter_live.py` — 11/11 passed
+- Default model fixed (dead → `opencode/glm-5.3-flash-free`); sessions pin models explicitly
+- `serena` MCP: connected · `rea` MCP: registered, **disabled** (until Gate B)
+- Feynman `0.5.57`: CLI-only (no MCP server) — wrapped as active-layer tools
 
 ## Layout
 
