@@ -1,0 +1,15 @@
+# JARVIS working artifacts — not for the repo
+.audio_cache/
+*.db
+*.db-wal
+*.db-shm
+.jarvis/
+.pytest_cache/
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+*.egg-info/
+.env
+.DS_Store
