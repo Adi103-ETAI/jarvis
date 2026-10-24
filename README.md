@@ -8,12 +8,14 @@ A personal AI assistant built as an **active layer on top of the OpenCode kernel
 
 ## Status
 
-Phase 2 — safety spine (gates) built and live-tested. See:
+Phase 3 — jarvisd console (turn runner) under construction; spine live-tested. Run the console: `PYTHONPATH=src python3 -m jarvis`. See:
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the approved architecture
 - [`docs/phase0-baseline.md`](docs/phase0-baseline.md) — live-verified Phase 0 findings
 - [docs/phase1-kernel-adapter.md](docs/phase1-kernel-adapter.md) — Phase 1 record + kernel behaviors
 - [docs/phase2-gates.md](docs/phase2-gates.md) — Phase 2 safety spine (Gate A/B, broker, subject rule)
+- [docs/decisions.md](docs/decisions.md) — decision log (language, kernel-update ritual, single-machine first)
+- jarvisd console v0: src/jarvis/console.py + src/jarvis/__main__.py — ask/pending/yes/no/status, journal
 - [`docs/opencode-api.lock.json`](docs/opencode-api.lock.json) — the locked API surface
 
 ## Current state
