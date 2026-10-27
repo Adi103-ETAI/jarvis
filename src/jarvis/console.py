@@ -3,21 +3,25 @@
 Wires the whole spine into one object:
 
     user line -> Gate A (console = direct intent)
-              -> kernel turn on a JARVIS-owned session
+              -> kernel turn on a JARVIS-owned session (fg or bg lane)
               -> Gate B doorkeeper answers benign calls, parks the rest
-              -> pending confirmations surface as one-time codes:
+              -> announcer surfaces one-time codes live, as they appear:
                      yes CODE   approve
                      no  CODE   refuse
+              -> cancel interrupts the current turn (own sessions only)
 
 Everything asked, decided, approved and refused lands in the journal and
-the gate audit log.
+the gate audit log. Turn latency (first token, total) is journalled for
+the Phase 3 acceptance measurement.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
+import threading
 import time
 
+from jarvis.announcer import Announcer
 from jarvis.audit import GateLog
 from jarvis.confirm import ConfirmationBroker
 from jarvis.gates.intent import classify
@@ -33,14 +37,42 @@ DEFAULT_WORKSPACE = "/home/sonic"
 DEFAULT_MODEL = {"providerID": "opencode", "id": "glm-5.3-flash-free"}
 
 HELP = """commands:
-  (any text)        ask JARVIS to do something (goes through both gates)
+  (any text)        ask JARVIS (foreground: waits for the answer)
+  bg TEXT           ask in the background lane; announcer reports completion
   pending           show confirmations waiting for your code
   yes CODE          approve a pending action (code is one-time)
   no  CODE          refuse a pending action
+  cancel            interrupt the current turn (JARVIS-owned sessions only)
+  replay            print the latest assistant reply
   status            kernel, session, model, queue summary
   help              this text
   quit              shut the console down cleanly
 """
+
+
+def first_token_seconds(events, session_id, started_wall, start_index=0):
+    """Seconds from prompt dispatch to the first text delta of THIS turn.
+
+    Pure helper over the captured event list (phase 3 gate: first-token
+    latency measurement). Kernel timestamps arrive in epoch units --
+    milliseconds or seconds depending on the route -- so both are handled;
+    anything undatable returns None instead of a wrong number.
+    """
+    for e in events[start_index:]:
+        if str(e.get("type", "")) != "session.text.delta":
+            continue
+        if (e.get("data") or {}).get("sessionID") != session_id:
+            continue
+        try:
+            t = float(e.get("created"))
+        except (TypeError, ValueError):
+            return None
+        if t > 1e12:              # epoch milliseconds
+            t /= 1000.0
+        if t < started_wall - 1:  # clock-skew guard: ignore nonsensical deltas
+            return None
+        return max(0.0, t - started_wall)
+    return None
 
 
 class JarvisConsole:
@@ -64,7 +96,25 @@ class JarvisConsole:
         self.worker.start()
         self.session = None
         self.events = []
-        self.kernel.events_nonblocking().attach(self.events.append)
+        # ONE event pipe, two subscribers: transcript capture + live announcer.
+        # (events_nonblocking() builds a fresh pipe per call -- attach both
+        # subscribers to the same pipe or the SSE stream would be duplicated.)
+        self.announcer = Announcer(self.worker, self.store, on_line=self._emit,
+                                   journal=self.journal)
+        pipe = self.kernel.events_nonblocking()
+        pipe.attach(self.events.append)
+        pipe.attach(self.announcer.note_event)
+        self.announcer.start()
+        self._turn_start = 0      # events index where the current turn begins
+        self._print_lock = threading.Lock()
+
+    # --------------------------------------------------------------- output
+
+    def _emit(self, line):
+        """Thread-safe line push from the announcer; redraw the prompt."""
+        with self._print_lock:
+            print("\n" + line, flush=True)
+            print("j> ", end="", flush=True)
 
     # ------------------------------------------------------------- session
 
@@ -80,8 +130,13 @@ class JarvisConsole:
 
     # ---------------------------------------------------------- main entry
 
-    def ask(self, text):
-        """Console input -> Gate A -> kernel turn (Gate B watches the tools)."""
+    def ask(self, text, lane="fg"):
+        """Console input -> Gate A -> kernel turn (Gate B watches the tools).
+
+        lane="fg": wait for the turn and return the assistant text (or the
+        pause notice when a human decision is needed mid-turn).
+        lane="bg": fire and forget; the announcer reports completion.
+        """
         verdict, reason = classify(text, "console")
         self.journal.add("gate-a", verdict=verdict, reason=reason,
                          text=text[:280], source="console")
@@ -89,20 +144,32 @@ class JarvisConsole:
             return "(" + reason + ") -- not launching a turn."
 
         sid = self.ensure_session()["id"]
+        self.announcer.watch_sid = sid
         self.worker.set_trust(sid, "console")
+        started_wall = time.time()
+        self._turn_start = len(self.events)
         try:
             self.kernel.prompt(sid, text)
         except KernelError as e:
             return "kernel refused the turn: " + e.message
-        self.journal.add("turn-started", session_id=sid, text=text[:280])
-        return "turn launched."
+        self.journal.add("turn-started", session_id=sid, lane=lane, text=text[:280])
+        if lane == "bg":
+            return "launched in background -- announcer reports when it idles ('replay' reads it)."
+        reply = self.wait_turn()
+        ft = first_token_seconds(self.events, sid, started_wall, self._turn_start)
+        self.journal.add("turn-metrics", session_id=sid, lane="fg",
+                         first_token_s=(round(ft, 3) if ft is not None else None),
+                         total_s=round(time.time() - started_wall, 2))
+        return reply or "(no assistant text captured -- try replay or see journal)"
 
     # --------------------------------------------------------- text output
 
-    def replay_text(self, session_id):
-        """Best-effort assistant text assembled from the event stream."""
+    def replay_text(self, session_id, start_index=None):
+        """Best-effort assistant text for one turn, from the event stream."""
+        if start_index is None:
+            start_index = self._turn_start
         parts = []
-        for e in self.events:
+        for e in self.events[start_index:]:
             if e.get("type") == "session.text.delta" and \
                     e.get("data", {}).get("sessionID") == session_id:
                 t = e.get("data", {}).get("text") or ""
@@ -110,16 +177,46 @@ class JarvisConsole:
                     parts.append(t)
         return "".join(parts).strip()
 
-    def wait_turn(self, timeout=120.0):
-        """Block until the current turn idles; return assistant text (or empty)."""
+    def wait_turn(self, timeout=240.0, chunk=5.0):
+        """Foreground lane: block until the turn idles, WITH one escape hatch.
+
+        Polls in chunks instead of one long server-side block so the console
+        yields the moment a human decision is needed -- otherwise a turn
+        waiting on a confirm code would hold hostage the very person who
+        must type the code. Returns assistant text, a pause notice
+        ("(paused ...)") or a still-running notice.
+        """
         if self.session is None:
             return ""
         sid = self.session["id"]
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            pend = self.worker.pending_list() + [{"code": p["code"]}
+                                                 for p in self.store.list()]
+            if pend:
+                codes = ", ".join(p["code"] for p in pend)
+                return ("(paused -- awaiting your decision: " + codes
+                        + "  ->  yes CODE / no CODE, then 'replay')")
+            try:
+                self.kernel.wait(sid, timeout=min(chunk, max(0.1, deadline - time.monotonic())))
+                return self.replay_text(sid)   # server says: idle
+            except KernelError:
+                pass  # per-chunk timeout or transient error -- poll until deadline
+        return "(turn still running -- check back with status)"
+
+    # -------------------------------------------------------------- actions
+
+    def cancel(self):
+        """Interrupt the current turn -- subject rule applies (own sessions only)."""
+        if self.session is None:
+            return "no session to cancel."
+        sid = self.session["id"]
         try:
-            self.kernel.wait(sid, timeout=timeout)
-        except KernelError:
-            return "(turn still running -- check back with status)"
-        return self.replay_text(sid)
+            stopped = self.kernel.interrupt(sid)
+        except KernelError as e:
+            return "cancel refused: " + e.message
+        self.journal.add("turn-cancelled", session_id=sid, stopped=stopped)
+        return "execution stopped." if stopped else "nothing was running."
 
     # ------------------------------------------------------------ commands
 
@@ -136,6 +233,14 @@ class JarvisConsole:
             return self._status()
         if low == "pending":
             return self._pending()
+        if low == "cancel":
+            return self.cancel()
+        if low == "replay":
+            if self.session is None:
+                return "no session yet."
+            return self.replay_text(self.session["id"]) or "(no assistant text for the latest turn)"
+        if low.startswith("bg "):
+            return self.ask(line[3:].strip(), lane="bg")
         if low.startswith("yes ") or low == "yes":
             return self._resolve(line[4:].strip(), True)
         if low.startswith("no ") or low == "no":
@@ -185,6 +290,7 @@ class JarvisConsole:
     # ---------------------------------------------------------------- exit
 
     def close(self):
+        self.announcer.stop()
         self.worker.stop()
         for sid in self.registry.active_ids():
             try:
@@ -195,7 +301,6 @@ class JarvisConsole:
 
 def main():
     """Interactive console loop: python3 -m jarvis"""
-    import sys
     jc = JarvisConsole()
     print("JARVIS console -- type help for commands.")
     try:
@@ -209,8 +314,6 @@ def main():
                 break
             if out:
                 print(out)
-        if len(sys.argv) > 1 and sys.argv[1] == "ask":
-            pass
     finally:
         jc.close()
     return 0

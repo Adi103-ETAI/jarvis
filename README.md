@@ -16,7 +16,7 @@ Phase 3 — jarvisd console (turn runner) under construction; spine live-tested.
 - [docs/phase2-gates.md](docs/phase2-gates.md) — Phase 2 safety spine (Gate A/B, broker, subject rule, **gated MCP bridge live**)
 - [docs/phase3-jarvisd.md](docs/phase3-jarvisd.md) — Phase 3: jarvisd console v0 + gated MCP bridge (ask/pending/yes-no/status, journal, bridge roundtrip tested)
 - [docs/decisions.md](docs/decisions.md) — decision log (language, kernel-update ritual, single-machine first)
-- jarvisd console v0: src/jarvis/console.py + src/jarvis/__main__.py — ask/pending/yes/no/status, journal
+- jarvisd console v0: src/jarvis/console.py + src/jarvis/__main__.py — ask (fg) / `bg TEXT` / pending / `yes CODE` / `no CODE` / cancel / replay / status, live announcer, journal, turn-latency metrics
 - [`docs/opencode-api.lock.json`](docs/opencode-api.lock.json) — the locked API surface
 
 ## Current state

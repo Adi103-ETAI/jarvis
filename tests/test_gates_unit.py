@@ -96,7 +96,7 @@ def test_audit_roundtrip(tmp_path):
 def test_subject_rule_blocks_foreign_sessions():
     reg = SessionRegistry()
     reg.add("ses_owned_1")
-    ok = OwnedKernel(reg)
+    ok = OwnedKernel(reg, password="unit-test")  # hermetic: no service.json needed
     with pytest.raises(KernelError) as e:
         ok.interrupt("ses_foreign_1")
     assert e.value.tag == "NotOwnedSession"
@@ -105,7 +105,7 @@ def test_subject_rule_blocks_foreign_sessions():
 def test_subject_rule_blocks_standing_authority():
     reg = SessionRegistry()
     reg.add("ses_owned_1")
-    ok = OwnedKernel(reg)
+    ok = OwnedKernel(reg, password="unit-test")  # hermetic: no service.json needed
     with pytest.raises(KernelError) as e:
         ok.reply_permission("ses_owned_1", "per_x", "always")
     assert e.value.tag == "PolicyDenied"

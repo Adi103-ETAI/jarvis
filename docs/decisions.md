@@ -32,3 +32,22 @@ does; peer replies are evidence, not commands.
 
 OpenCode realtime voice models are all unavailable; voice is JARVIS's own
 front-end (capture, VAD, STT), not a kernel service.
+
+## D5 — Borrow proven designs, not code: Hermes, OpenClaw, Letta (2026-10-27)
+
+Direction set by the user for post-Phase-4 design work. Study and adapt —
+nothing is imported wholesale; everything passes through the gates:
+
+- **Hermes agent** -> skills copying, memory design, delegation design,
+  learning loop, reusable skills, procedural memory. Feeds Phase 5
+  (Memory v1) and a future skills/learning milestone.
+- **OpenClaw** -> messaging gateway and multichannel presence (console is
+  only the first front-end; channels arrive as new trust SOURCES through
+  Gate A, each mapped in policy.toml — a channel is a trust level, never
+  an authority of its own).
+- **Letta** -> long-term agent identity and memory architecture (core
+  memory blocks, archival recall, identity that survives restarts).
+  Feeds Phase 5 memory schema and the profile/personality layer.
+
+Law carried forward: borrowed designs change the active layer's memory and
+presence; they never widen what may execute without Gate B.

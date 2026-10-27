@@ -13,10 +13,11 @@ def run(argv):
     if argv and argv[0] == "ask" and len(argv) >= 2:
         jc = JarvisConsole()
         try:
-            print(jc.ask(" ".join(argv[1:])))
-            final = jc.wait_turn(timeout=240)
+            # foreground lane: ask() waits for the turn and returns the reply
+            # (or the pause notice if a confirmation code is needed mid-turn)
+            out = jc.ask(" ".join(argv[1:]), lane="fg")
             print("--- assistant ---")
-            print(final if final else "(no text captured; see journal)")
+            print(out if out else "(no text captured; see journal)")
         finally:
             jc.close()
         return 0

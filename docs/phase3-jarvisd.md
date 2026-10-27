@@ -91,8 +91,48 @@ Everything — asks, verdicts, approvals, refusals — lands in
 
 ## 6. Still open
 
-- Confirmation presenter polish (codes announced live as they appear)
-- Memory summarizer (journal -> daily brief -> context weaving)
-- Kernel-update standing job (snapshot -> update -> restart -> compat suite;
-  admit on green, rollback on red, ask-human on unclear)
-- OS sandbox (user decision pending)
+- [x] Confirmation presenter polish — DONE 2026-10-27 (see §7: announcer)
+- [ ] Memory summarizer (journal -> daily brief -> context weaving)
+- [ ] Kernel-update standing job (snapshot -> update -> restart -> compat suite;
+      admit on green, rollback on red, ask-human on unclear)
+- [ ] OS sandbox (user decision pending)
+
+## 7. Phase 3 tail — live presenter, cancel, lanes, latency (2026-10-27)
+
+Closes the Phase 3 acceptance items from the architecture build order:
+foreground/background lanes, cancellation, first-token latency, and the
+"codes announced live" polish.
+
+| Piece | File | Job |
+|---|---|---|
+| Announcer | src/jarvis/announcer.py | background presenter: new confirmations surface as they appear (broker AND MCP-bridge store), resolution noted once, turn-idle narrated once; never decides anything |
+| cancel | src/jarvis/console.py | interrupts the current turn through OwnedKernel — subject rule applies, foreign sessions stay untouchable; journalled |
+| replay | src/jarvis/console.py | prints the latest turn's assistant text only (turn-scoped event slice, not the whole session transcript) |
+| fg/bg lanes | src/jarvis/console.py | plain text = foreground (waits, returns reply); `bg TEXT` = fire-and-forget; `turn-started` journals the lane |
+| pause-on-pending | src/jarvis/console.py | foreground wait polls in chunks and yields the console the moment a human decision is pending — a turn waiting on a confirm code can no longer hold the person who must type the code hostage |
+| latency metrics | src/jarvis/console.py | `turn-metrics` journal entry per foreground turn: first_token_s (ms-or-s epoch handled, clock-skew guarded) and total_s |
+
+Console surface is now: any-text (fg) / `bg TEXT` / `pending` / `yes CODE` /
+`no CODE` / `cancel` / `replay` / `status` / `help` / `quit`.
+
+Design notes:
+
+- ONE SSE event pipe, two subscribers (transcript capture + announcer).
+  `events_nonblocking()` builds a fresh pipe per call — attaching twice via
+  two pipes would duplicate the stream.
+- The announcer is deliberately dumb: announces once, resolution once, and a
+  broken source is skipped, never fatal. It never decides.
+- Latency: `created` timestamps arrive in epoch ms or s depending on route;
+  both handled, nonsense values return None rather than a wrong number.
+
+Bug fixed en route (caught by the new unit tests): `KernelError` never set a
+`.message` attribute while console.py read `e.message` — the first kernel
+refusal would have raised AttributeError instead of showing the refusal.
+`KernelError` now carries `.message` explicitly.
+
+Test status: tests/test_console_unit.py — 16 passed (announcer dedupe/
+resolution/broken-source/idle-narration, latency math, hermetic console boot,
+cancel paths, pause-on-pending, bg/fg lanes, replay). test_gates_unit.py now
+boots OwnedKernel hermetically (password="unit-test") — no service.json
+dependency; full hermetic suite 46/46 green. Live E2E suites still pending
+model quota (unchanged from §5).
