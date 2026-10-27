@@ -109,8 +109,8 @@ deterministic, auditable, reproducible — unless a decision revises D6).
 
 ## Standing prerequisites (not phase-numbered)
 
-- **Live E2E rerun** — blocked on free-model quota reset. Rerun
-  test_adapter_live / test_gateb_live / test_jarvisd_live, and verify the
+- **Live E2E rerun** — blocked on free-model quota reset. Rerun the
+  tests/live/ suites (adapter, gateb, jarvisd), and verify the
   adapter's compact / inject_context / switch_model / list_models paths
   against the real kernel (unit tests use fakes for those).
 - **OS sandbox decision** — bubblewrap/userns vs a dedicated WSL distro.

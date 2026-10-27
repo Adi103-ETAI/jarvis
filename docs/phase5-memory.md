@@ -9,13 +9,13 @@ filtered through D6 (capture over extraction — see decisions.md).
 
 | Piece | File | Job |
 |---|---|---|
-| FactStore | src/jarvis/memory.py | core memory (Letta analog): subject-written durable facts, append-only JSONL, tombstone forgetting, dedupe-refresh, hard cap |
-| Archive | src/jarvis/memory.py | archival memory (Letta analog): every finished JARVIS turn (question + full answer), verbatim, plus compaction snapshots |
-| Recall | src/jarvis/memory.py | deterministic search over facts + turns (token overlap + exact phrase + recency). No embeddings, no model — auditable and free |
-| TurnArchiver | src/jarvis/memory.py | EventPipe subscriber: on session.idle, archives the turn for JARVIS-OWNED sessions only (fg, bg, and routine turns, one path) |
-| Compactor | src/jarvis/memory.py | the compaction plugin: snapshot -> kernel compact -> durable facts re-injected as background |
+| FactStore | src/jarvis/memory/facts.py | core memory (Letta analog): subject-written durable facts, append-only JSONL, tombstone forgetting, dedupe-refresh, hard cap |
+| Archive | src/jarvis/memory/archive.py | archival memory (Letta analog): every finished JARVIS turn (question + full answer), verbatim, plus compaction snapshots |
+| Recall | src/jarvis/memory/recall.py | deterministic search over facts + turns (token overlap + exact phrase + recency). No embeddings, no model — auditable and free |
+| TurnArchiver | src/jarvis/memory/archiver.py | EventPipe subscriber: on session.idle, archives the turn for JARVIS-OWNED sessions only (fg, bg, and routine turns, one path) |
+| Compactor | src/jarvis/memory/compactor.py | the compaction plugin: snapshot -> kernel compact -> durable facts re-injected as background |
 | Prompt injection | console._memory_prefix | core facts (identity/preference) ride into every console+scheduled turn; non-core facts join only when relevant to the prompt |
-| Console commands | src/jarvis/console.py | `remember TEXT` / `forget ID\|TEXT` / `facts` / `recall QUERY` / `memory` / `compact` / `model [P/M]` / `models` |
+| Console commands | src/jarvis/console/ | `remember TEXT` / `forget ID\|TEXT` / `facts` / `recall QUERY` / `memory` / `compact` / `model [P/M]` / `models` |
 | Memory caps | config/policy.toml `[memory]` | max_facts, inject_max_chars, relevant_top_k — memory is policy, so its limits live in the policy file |
 
 ## 2. The law of memory

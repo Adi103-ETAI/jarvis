@@ -16,7 +16,7 @@ import pytest
 from jarvis.mcp_gate import MCPGate
 from jarvis.pending_store import PendingStore
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 POLICY = str(REPO / "config" / "policy.toml")
 SRCTRIP = str(REPO / "src")
 FAKE = str(REPO / "tests" / "fake_mcp_server.py")

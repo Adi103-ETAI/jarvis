@@ -222,7 +222,7 @@ def test_routine_commands_route_and_report(jc):
 def test_shipped_routines_config_parses():
     from pathlib import Path
     from jarvis.scheduler import load_routines
-    cfg = Path(__file__).resolve().parent.parent / "config" / "routines.toml"
+    cfg = Path(__file__).resolve().parents[2] / "config" / "routines.toml"
     if not cfg.exists():
         pytest.skip("shipped config absent")
     rs = load_routines(str(cfg))

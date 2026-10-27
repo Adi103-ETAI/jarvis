@@ -1,101 +1,33 @@
-"""JARVIS kernel adapter — the stable ABI between the active layer and OpenCode.
+"""JARVIS kernel adapter -- the stable ABI between the active layer and OpenCode.
 
 Every method maps to exactly ONE operation in docs/opencode-api.lock.json
 (OpenCode v2.1.4, experimental HTTP surface). No policy lives here: this is a
 dumb, auditable pipe. Decisions belong to Gate A / Gate B (Phase 2).
 
-Auth: Basic "opencode:<password>" — password read from
-~/.config/opencode/service.json (the same file the CLI itself uses).
+Package layout: config.py (where/who), http.py (transport + SSE parse),
+events.py (EventPipe), errors.py (KernelError). This module is the API
+surface itself: one flat method per locked operation, inherited transport.
 """
 
 from __future__ import annotations
 
-import base64
-import json
-import os
-import threading
-import urllib.error
-import urllib.request
-from pathlib import Path
 from typing import Any, Iterator, Optional
 
-KERNEL_VERSION = "2.1.4"          # pin; bumping re-locks the API (docs/opencode-api.lock.json)
-DEFAULT_BASE = "http://127.0.0.1:49374"
-SERVICE_JSON = Path.home() / ".config/opencode/service.json"
+from jarvis.kernel.config import DEFAULT_BASE, KERNEL_VERSION, SERVICE_JSON  # noqa: F401 (re-exported)
+from jarvis.kernel.errors import KernelError  # noqa: F401 (re-exported)
+from jarvis.kernel.events import EventPipe  # noqa: F401 (re-exported)
+from jarvis.kernel.http import KernelTransport
+
+__all__ = ["Kernel", "KernelError", "EventPipe",
+           "KERNEL_VERSION", "DEFAULT_BASE", "SERVICE_JSON"]
 
 
-class KernelError(RuntimeError):
-    """A structured error returned by, or about, the kernel."""
+class Kernel(KernelTransport):
+    """One connection to one OpenCode service instance.
 
-    def __init__(self, message: str, *, status: int = 0, tag: str = ""):
-        super().__init__(message)
-        self.message = message   # callers read e.message directly (console, gates)
-        self.status = status
-        self.tag = tag
-
-
-class Kernel:
-    """One connection to one OpenCode service instance."""
-
-    def __init__(self, base_url: Optional[str] = None, password: Optional[str] = None):
-        self.base_url = (base_url or os.environ.get("OPENCODE_URL") or DEFAULT_BASE).rstrip("/")
-        pw = password or os.environ.get("OPENCODE_PASSWORD")
-        if pw is None:
-            try:
-                pw = json.loads(SERVICE_JSON.read_text())["password"]
-            except Exception as e:  # noqa: BLE001 - surface the real cause
-                raise KernelError(f"cannot obtain kernel password: {e}") from e
-        token = base64.b64encode(f"opencode:{pw}".encode()).decode()
-        self._auth = f"Basic {token}"
-
-    # ------------------------------------------------------------------ core
-
-    def _request(
-        self,
-        method: str,
-        path: str,
-        body: Optional[dict] = None,
-        timeout: float = 30.0,
-        stream: bool = False,
-    ):
-        """One HTTP call to one locked operation. Returns parsed JSON, or None on 204."""
-        url = f"{self.base_url}{path}"
-        data = None
-        headers = {"Authorization": self._auth, "Accept": "text/event-stream" if stream else "application/json"}
-        if body is not None:
-            data = json.dumps(body).encode()
-            headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(url, data=data, headers=headers, method=method)
-        try:
-            response = urllib.request.urlopen(request, timeout=timeout)
-        except urllib.error.HTTPError as e:
-            payload = e.read()
-            tag, message = "", e.reason
-            try:
-                parsed = json.loads(payload)
-                tag = parsed.get("_tag", "")
-                message = parsed.get("message", message)
-            except Exception:  # noqa: BLE001
-                parsed = {}
-            raise KernelError(message or f"HTTP {e.code}", status=e.code, tag=tag) from None
-        except urllib.error.URLError as e:
-            raise KernelError(f"kernel unreachable at {self.base_url}: {e.reason}", status=0) from None
-
-        if stream:
-            return response  # caller owns the file-like SSE stream
-        if response.status == 204 or not response.readable():
-            return None
-        raw = response.read()
-        if not raw.strip():
-            return None
-        return json.loads(raw)
-
-    @staticmethod
-    def _data(payload: Any) -> Any:
-        """Kernel envelopes success as {data: ...}. Unwrap it once, here, everywhere."""
-        if isinstance(payload, dict) and "data" in payload:
-            return payload["data"]
-        return payload
+    One method per locked operation; the class is deliberately flat so
+    each method reads as the ABI record of one endpoint.
+    """
 
     # ------------------------------------------------------------- lifecycle
 
@@ -263,69 +195,18 @@ class Kernel:
     # ---------------------------------------------------------------- events
 
     def events(self) -> Iterator[dict]:
-        """GET /api/event — SSE. Yields parsed event dicts until the stream breaks.
+        """GET /api/event -- SSE. Yields parsed event dicts until the stream breaks.
 
         Run this in a dedicated thread; it blocks. Each event carries
-        {type, properties{...}} per the kernel's event vocabulary — consumers
+        {type, properties{...}} per the kernel's event vocabulary -- consumers
         (Phase 5 turn-runner) subscribe; the adapter only translates bytes.
         """
         resp = self._request("GET", "/api/event", timeout=None, stream=True)  # type: ignore[arg-type]
-        data_lines: list[str] = []
         try:
-            for line in resp:
-                text = line.decode("utf-8", "replace").rstrip("\r\n")
-                if not text:
-                    if data_lines:
-                        blob = "".join(data_lines)
-                        data_lines = []
-                        try:
-                            yield json.loads(blob)
-                        except json.JSONDecodeError:
-                            continue
-                    continue
-                if text.startswith("data:"):
-                    data_lines.append(text[len("data:"):].lstrip())
+            yield from self.iter_sse(resp)
         finally:
             resp.close()
 
     def events_nonblocking(self) -> "EventPipe":
         """events() plus a background thread; .attach(callback) from any thread."""
         return EventPipe(self)
-
-
-class EventPipe:
-    """Owns the SSE thread so callers never think about blocking."""
-
-    def __init__(self, kernel: Kernel):
-        self._kernel = kernel
-        self._subs: list[Any] = []  # callables(event: dict)
-        self._thread: Optional[threading.Thread] = None
-        self._lock = threading.Lock()
-
-    def attach(self, callback) -> None:
-        with self._lock:
-            self._subs.append(callback)
-        self._ensure_thread()
-
-    def _ensure_thread(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-
-        def run():
-            # The SSE stream is the pipe's life. If the kernel goes down or
-            # restarts, the pipe ends QUIETLY -- reconnect/recovery is a
-            # service-lifecycle concern (later phase); a noisy thread death
-            # helps nobody. Callers re-attach by rebuilding the console.
-            try:
-                for event in self._kernel.events():
-                    with self._lock:
-                        for cb in list(self._subs):
-                            try:
-                                cb(event)
-                            except Exception:  # noqa: BLE001 - a bad subscriber must not kill the pipe
-                                pass
-            except Exception:  # noqa: BLE001 -- kernel unreachable/stream broke
-                pass
-
-        self._thread = threading.Thread(target=run, name="jarvis-eventpipe", daemon=True)
-        self._thread.start()

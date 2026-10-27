@@ -23,17 +23,24 @@ model-quota reset. Next: Phase 6 — skills (the borrowing plan lives in
 - [docs/phase5-memory.md](docs/phase5-memory.md) — Phase 5: memory — facts, archive, recall, compaction, prompt injection, model knob + failover (§8)
 - [docs/decisions.md](docs/decisions.md) — decision log (language, kernel-update ritual, single-machine first, borrowed designs D5, memory stance D6, roadmap D7)
 - [docs/roadmap.md](docs/roadmap.md) — the borrowing plan (D5 → build order): Hermes skills/learning loop, OpenClaw gateway + channels, Letta identity + sleep-time compute, phases 6–9
-- jarvisd console: src/jarvis/console.py + src/jarvis/__main__.py — ask (fg) / `bg TEXT` / pending / `yes CODE` / `no CODE` / cancel / replay / routines / `run NAME` / `routine NAME off|on` / remember / forget / facts / recall / memory / compact / `model P/M` / models / status, live announcer, journal, turn-latency metrics
+- jarvisd console: `src/jarvis/console/` package — `app.py` (core loop, ask +
+  failover, dispatch) + `commands.py` (command surface) + `turns.py` (scan
+  helpers); entry `src/jarvis/__main__.py` — ask (fg) / `bg TEXT` / pending / `yes CODE` / `no CODE` / cancel / replay / routines / `run NAME` / `routine NAME off|on` / remember / forget / facts / recall / memory / compact / `model P/M` / models / status, live announcer, journal, turn-latency metrics
 - T1 scheduler: src/jarvis/scheduler.py + config/routines.toml — routines fire without a person present, on a dedicated session, guarded (one fire/day, no overlap, budget watchdog, failure auto-disable, DND)
-- Memory: src/jarvis/memory.py — subject-written facts (core), verbatim turn archive (archival), deterministic recall, compaction plugin that re-injects durable facts; caps in config/policy.toml `[memory]`
+- Memory: `src/jarvis/memory/` package — `facts.py` (subject-written core),
+  `archive.py` (verbatim archival), `recall.py` (deterministic search),
+  `prompt.py` (injection block), `archiver.py` (turn capture), `compactor.py`
+  (compaction plugin); caps in config/policy.toml `[memory]`
 - [`docs/opencode-api.lock.json`](docs/opencode-api.lock.json) — the locked API surface
 
 ## Current state
 
 - OpenCode `v2.1.4` pinned, live at `http://127.0.0.1:49374`
-- Kernel adapter: `src/jarvis/kernel/adapter.py` — sessions, prompt, steer,
-  interrupt, permissions, fork, compact, events, model ops (stdlib only)
-- Live integration tests: `tests/test_adapter_live.py` — 11/11 passed
+- Kernel adapter: `src/jarvis/kernel/` package — `adapter.py` (one method per
+  locked operation), `http.py` (transport + SSE), `events.py` (EventPipe),
+  `config.py`, `errors.py` (stdlib only)
+- Tests: `tests/unit/` (hermetic, 120 green) + `tests/live/` (real kernel) —
+  `PYTHONPATH=src python3 -m pytest tests/unit -q`
 - Default model `opencode/glm-5.3-flash-free`; switch with `model provider/model-id` or `JARVIS_MODEL` env; auto-failover on rate limits via `config/policy.toml [model] failover` (you write the chain — file is the approval)
 - `serena` MCP: connected **through jarvis-mcp-gate** (discovery & reads flow free; mutating calls gated by one-time code) · `rea` MCP: registered, **disabled** (until Gate B)
 - Feynman `0.5.57`: CLI-only (no MCP server) — wrapped as active-layer tools
@@ -41,9 +48,17 @@ model-quota reset. Next: Phase 6 — skills (the borrowing plan lives in
 ## Layout
 
 ```
-docs/            architecture, phase baselines, API lock
+docs/            architecture, phase baselines, roadmap, decisions, API lock
 profiles/        profile .md files (personality — NOT workspaces)
-src/jarvis/      active layer (initiative, safety gate, memory, voice) + kernel adapter
+src/jarvis/      the active layer
+  gates/         Gate A (intent) · Gate B (tool policy) · permission worker
+  kernel/        OpenCode adapter: transport, SSE, EventPipe, operation surface
+  memory/        core facts · verbatim archive · recall · prompt block · compaction
+  console/       text front-end: app (loop+failover) · commands (surface) · turns
+  scheduler.py   routines (config/routines.toml)
+  registry.py    owned-session trust registry
+  announcer.py   live narration of codes/results
+  mcp_gate.py    gated MCP bridge (jarvis-mcp-gate)
 sandbox/         WSL/OS confinement procedure
-tests/
+tests/           unit/ (hermetic) · live/ (real kernel) · fixtures
 ```
