@@ -32,6 +32,7 @@ from jarvis.kernel.adapter import KernelError
 from jarvis.pending_store import PendingStore
 from jarvis.policy import Policy
 from jarvis.registry import OwnedKernel, SessionRegistry
+from jarvis.scheduler import Scheduler
 
 DEFAULT_WORKSPACE = "/home/sonic"
 DEFAULT_MODEL = {"providerID": "opencode", "id": "glm-5.3-flash-free"}
@@ -44,6 +45,9 @@ HELP = """commands:
   no  CODE          refuse a pending action
   cancel            interrupt the current turn (JARVIS-owned sessions only)
   replay            print the latest assistant reply
+  routines          list standing routines and their state
+  run NAME          launch a routine now (today's scheduled fire is satisfied)
+  routine NAME off|on   runtime toggle: may only tighten, never widen
   status            kernel, session, model, queue summary
   help              this text
   quit              shut the console down cleanly
@@ -78,7 +82,7 @@ def first_token_seconds(events, session_id, started_wall, start_index=0):
 class JarvisConsole:
     def __init__(self, *, workspace=DEFAULT_WORKSPACE, model=None,
                  policy_path=None, journal_path=None, audit_path=None,
-                 pending_root=None):
+                 pending_root=None, routines_path=None):
         self.workspace = workspace
         self.model = model or dict(DEFAULT_MODEL)
         self.audit = GateLog(audit_path)
@@ -96,15 +100,20 @@ class JarvisConsole:
         self.worker.start()
         self.session = None
         self.events = []
-        # ONE event pipe, two subscribers: transcript capture + live announcer.
-        # (events_nonblocking() builds a fresh pipe per call -- attach both
-        # subscribers to the same pipe or the SSE stream would be duplicated.)
+        # ONE event pipe, three subscribers: transcript capture + live
+        # announcer + scheduler (routine completion/failure). Events travel
+        # once per subscriber -- attaching via separate pipes would
+        # duplicate the SSE stream.
         self.announcer = Announcer(self.worker, self.store, on_line=self._emit,
+                                   journal=self.journal)
+        self.scheduler = Scheduler(self, routines_path=routines_path,
                                    journal=self.journal)
         pipe = self.kernel.events_nonblocking()
         pipe.attach(self.events.append)
         pipe.attach(self.announcer.note_event)
+        pipe.attach(self.scheduler.note_event)
         self.announcer.start()
+        self.scheduler.start()
         self._turn_start = 0      # events index where the current turn begins
         self._print_lock = threading.Lock()
 
@@ -130,22 +139,33 @@ class JarvisConsole:
 
     # ---------------------------------------------------------- main entry
 
-    def ask(self, text, lane="fg"):
-        """Console input -> Gate A -> kernel turn (Gate B watches the tools).
+    def ask(self, text, lane="fg", source="console", session_id=None):
+        """Input -> Gate A -> kernel turn (Gate B watches the tools).
 
-        lane="fg": wait for the turn and return the assistant text (or the
-        pause notice when a human decision is needed mid-turn).
-        lane="bg": fire and forget; the announcer reports completion.
+        source       trust provenance: "console" | "scheduled" (routines);
+                     Gate A classifies by source, Gate B judges by it.
+        session_id   run on a specific JARVIS-owned session (the scheduler's
+                     dedicated routine session) instead of the console one.
+        lane="fg"    wait for the turn and return the assistant text (or the
+                     pause notice when a human decision is needed mid-turn).
+        lane="bg"    fire and forget; the announcer reports completion.
         """
-        verdict, reason = classify(text, "console")
+        verdict, reason = classify(text, source)
         self.journal.add("gate-a", verdict=verdict, reason=reason,
-                         text=text[:280], source="console")
+                         text=text[:280], source=source)
         if verdict != "act":
             return "(" + reason + ") -- not launching a turn."
 
-        sid = self.ensure_session()["id"]
-        self.announcer.watch_sid = sid
-        self.worker.set_trust(sid, "console")
+        if session_id is not None and self.registry.owns(session_id):
+            sid = session_id                  # pre-ensured (scheduler session)
+        else:
+            try:
+                sid = self.ensure_session()["id"]
+            except KernelError as e:
+                return "kernel unreachable -- cannot open a session: " + e.message
+        if source == "console":
+            self.announcer.watch_sid = sid    # routine turns narrate via scheduler
+        self.worker.set_trust(sid, source)
         started_wall = time.time()
         self._turn_start = len(self.events)
         try:
@@ -239,6 +259,15 @@ class JarvisConsole:
             if self.session is None:
                 return "no session yet."
             return self.replay_text(self.session["id"]) or "(no assistant text for the latest turn)"
+        if low == "routines":
+            return "\n".join(self.scheduler.list_lines())
+        if low.startswith("run "):
+            return self.scheduler.run_now(line[4:].strip())
+        if low == "routine" or low.startswith("routine "):
+            parts = line[8:].split() if low.startswith("routine ") else []
+            if len(parts) == 2 and parts[1] in ("off", "on"):
+                return self.scheduler.runtime_toggle(parts[0], parts[1] == "on")
+            return "usage: routine NAME off|on"
         if low.startswith("bg "):
             return self.ask(line[3:].strip(), lane="bg")
         if low.startswith("yes ") or low == "yes":
@@ -249,12 +278,14 @@ class JarvisConsole:
 
     def _status(self):
         sids = self.registry.active_ids()
+        armed = sum(1 for r in self.scheduler.routines if r.active)
         return "\n".join([
             "kernel    : " + self.kernel.base_url,
             "workspace : " + self.workspace,
             "model     : " + str(self.model.get("providerID", "?")) + "/" + str(self.model.get("id", "?")),
             "session   : " + (self.session["id"] if self.session else "(none yet)"),
             "owned     : " + str(len(sids)) + " session(s)",
+            "routines  : " + str(armed) + "/" + str(len(self.scheduler.routines)) + " armed",
             "awaiting  : " + str(len(self.worker.pending_list()) + len(self.store.list()))
             + " confirmation(s)",
         ])
@@ -290,6 +321,7 @@ class JarvisConsole:
     # ---------------------------------------------------------------- exit
 
     def close(self):
+        self.scheduler.stop()
         self.announcer.stop()
         self.worker.stop()
         for sid in self.registry.active_ids():

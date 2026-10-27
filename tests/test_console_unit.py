@@ -125,6 +125,8 @@ def jc(tmp_path, monkeypatch):
         journal_path=tmp_path / "journal.jsonl",
         audit_path=tmp_path / "audit.jsonl",
         pending_root=tmp_path / "pending",
+        routines_path=str(tmp_path / "routines.toml"),  # missing -> zero routines:
+        # tests must never fire a real routine against a live kernel
     )
     yield console
     console.close()
@@ -209,3 +211,23 @@ def test_fg_lane_pauses_then_replay_reads_turn(jc):
                       "data": {"sessionID": "ses_test", "text": "done"},
                       "created": time.time()})
     assert jc.handle("replay") == "done"
+
+
+def test_routine_commands_route_and_report(jc):
+    assert "no routines defined" in jc.handle("routines")
+    assert "no routine named" in jc.handle("routine ghost off")
+    assert jc.handle("routine") == "usage: routine NAME off|on"
+
+
+def test_shipped_routines_config_parses():
+    from pathlib import Path
+    from jarvis.scheduler import load_routines
+    cfg = Path(__file__).resolve().parent.parent / "config" / "routines.toml"
+    if not cfg.exists():
+        pytest.skip("shipped config absent")
+    rs = load_routines(str(cfg))
+    by = {r.name: r for r in rs}
+    assert "morning-briefing" in by
+    mb = by["morning-briefing"]
+    assert mb.enabled and mb.schedule == "daily 08:00"
+    assert "journal" in mb.task.lower()

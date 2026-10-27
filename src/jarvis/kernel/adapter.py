@@ -312,13 +312,20 @@ class EventPipe:
             return
 
         def run():
-            for event in self._kernel.events():
-                with self._lock:
-                    for cb in list(self._subs):
-                        try:
-                            cb(event)
-                        except Exception:  # noqa: BLE001 - a bad subscriber must not kill the pipe
-                            pass
+            # The SSE stream is the pipe's life. If the kernel goes down or
+            # restarts, the pipe ends QUIETLY -- reconnect/recovery is a
+            # service-lifecycle concern (later phase); a noisy thread death
+            # helps nobody. Callers re-attach by rebuilding the console.
+            try:
+                for event in self._kernel.events():
+                    with self._lock:
+                        for cb in list(self._subs):
+                            try:
+                                cb(event)
+                            except Exception:  # noqa: BLE001 - a bad subscriber must not kill the pipe
+                                pass
+            except Exception:  # noqa: BLE001 -- kernel unreachable/stream broke
+                pass
 
         self._thread = threading.Thread(target=run, name="jarvis-eventpipe", daemon=True)
         self._thread.start()

@@ -8,15 +8,19 @@ A personal AI assistant built as an **active layer on top of the OpenCode kernel
 
 ## Status
 
-Phase 3 — jarvisd console (turn runner) under construction; spine live-tested. Run the console: `PYTHONPATH=src python3 -m jarvis`. See:
+Phase 4 — minimal proactivity (T1 scheduler + approved 08:00 briefing) built
+and unit-tested; live E2E pending model-quota reset. Run the console:
+`PYTHONPATH=src python3 -m jarvis`. See:
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the approved architecture
 - [`docs/phase0-baseline.md`](docs/phase0-baseline.md) — live-verified Phase 0 findings
 - [docs/phase1-kernel-adapter.md](docs/phase1-kernel-adapter.md) — Phase 1 record + kernel behaviors
 - [docs/phase2-gates.md](docs/phase2-gates.md) — Phase 2 safety spine (Gate A/B, broker, subject rule, **gated MCP bridge live**)
 - [docs/phase3-jarvisd.md](docs/phase3-jarvisd.md) — Phase 3: jarvisd console v0 + gated MCP bridge (ask/pending/yes-no/status, journal, bridge roundtrip tested)
-- [docs/decisions.md](docs/decisions.md) — decision log (language, kernel-update ritual, single-machine first)
-- jarvisd console v0: src/jarvis/console.py + src/jarvis/__main__.py — ask (fg) / `bg TEXT` / pending / `yes CODE` / `no CODE` / cancel / replay / status, live announcer, journal, turn-latency metrics
+- [docs/phase4-scheduler.md](docs/phase4-scheduler.md) — Phase 4: T1 scheduler, 08:00 briefing, cycle guards (dedupe, budget, failure auto-disable, DND)
+- [docs/decisions.md](docs/decisions.md) — decision log (language, kernel-update ritual, single-machine first, borrowed designs D5)
+- jarvisd console: src/jarvis/console.py + src/jarvis/__main__.py — ask (fg) / `bg TEXT` / pending / `yes CODE` / `no CODE` / cancel / replay / routines / `run NAME` / `routine NAME off|on` / status, live announcer, journal, turn-latency metrics
+- T1 scheduler: src/jarvis/scheduler.py + config/routines.toml — routines fire without a person present, on a dedicated session, guarded (one fire/day, no overlap, budget watchdog, failure auto-disable, DND)
 - [`docs/opencode-api.lock.json`](docs/opencode-api.lock.json) — the locked API surface
 
 ## Current state

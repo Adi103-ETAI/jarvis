@@ -1,0 +1,51 @@
+# JARVIS standing routines — the T1 scheduler's policy file.
+#
+# A routine exists because the human wrote it here. That is the approval.
+# Runtime (console/scheduler) may list routines and turn them OFF, but it
+# can never author, widen, or re-enable a file-disabled routine: standing
+# authority is minted by policy files, not by a model (see decisions.md D2).
+#
+# Schedule format (v0): "daily HH:MM" — 24h local time.
+# Every routine turn still passes through the same spine:
+#   Gate A (source=scheduled -> act) -> kernel turn on the dedicated
+#   jarvis-routines session -> Gate B (trust.scheduled: mutating = confirm)
+#   -> one-time code for anything not allowlisted.
+# Budgets and cycle guards: max_run_minutes watchdog interrupts runaway
+# turns; cooldown_minutes dedupes; max_consecutive_failures auto-disables
+# and asks for human review. Failed routines never self-retry.
+
+version = 1
+
+[defaults]
+max_run_minutes = 10
+cooldown_minutes = 60
+max_consecutive_failures = 3
+# Quiet window: suppresses ROUTINE NOTIFICATIONS only (start/finish lines).
+# Confirmation codes are NEVER suppressed — safety outlouds DND.
+dnd = "23:00-07:00"
+
+[[routine]]
+name = "morning-briefing"
+schedule = "daily 08:00"
+enabled = true
+notify = true
+max_run_minutes = 10
+task = """
+Good morning briefing (read-and-report only; do not modify any files).
+Read the journal at /home/sonic/work-jarvis/.jarvis/journal.jsonl — the
+entries from the last 24 hours — and the gate audit log at
+/home/sonic/work-jarvis/.jarvis/gate-log.jsonl. Summarize:
+1. what was asked of you and what was done,
+2. anything still awaiting a human confirmation code,
+3. failures, refusals or timeouts worth knowing about,
+4. today's date and one suggested focus for the day.
+Keep it under 200 words.
+"""
+
+# Example of a file-disabled routine (approval withdrawn; runtime cannot
+# turn this back on):
+# [[routine]]
+# name = "kernel-update-ritual"
+# schedule = "daily 03:30"
+# enabled = false
+# task = "Run the kernel-update ritual per decisions.md D2: snapshot, update, restart, compat suite; adopt on green, rollback on red, ask-human on unclear."
