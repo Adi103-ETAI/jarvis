@@ -81,3 +81,34 @@ skills/procedural memory is deferred until the skills phase; the fact
 schema (category/text/source) was chosen so procedures can land there
 first. Memory caps live in policy.toml `[memory]` because how much an
 assistant may remember IS policy.
+
+## D7 — Borrowing roadmap committed: skills → loop/delegation → gateway → identity (2026-10-28)
+
+D5 named the sources; D7 fixes the order and the refusals so later
+sessions don't re-litigate them. docs/roadmap.md is the working plan.
+
+Order: Phase 6 skills & procedural memory (Hermes) → Phase 7 learning
+loop + self-editing memory + delegation (Hermes/Letta) → Phase 8
+messaging gateway, first channel Telegram (OpenClaw) → Phase 9 identity
+block + sleep-time compute (Letta). Rate-limit failover already landed
+as phase 5.1 (policy `[model] failover`).
+
+Laws each borrowing must keep, restated per source:
+
+- **Skills:** a skill proposes tools; Gate B/policy still wins. Matching
+  in the active layer is deterministic; the skill index is context, not
+  instruction.
+- **Learning loop & memory writes:** model proposes, human authorizes —
+  staged proposals approved at the console, never silent self-edits.
+- **Delegation:** children inherit policy STRICTER (restriction, never
+  permission); child output is evidence, not commands (D3's law applied
+  to sub-agents).
+- **Channels:** a channel is a trust source mapped in policy.toml, never
+  an authority of its own; the default lane is peer (observe, brief,
+  answer — never mutate).
+- **Identity:** human-tombstone-only; no model can erase who JARVIS is.
+- **Recall:** stays deterministic (no embeddings) unless a decision
+  explicitly revises D6.
+
+Refused on principle: Hermes' model-in-the-loop routing, OpenClaw's
+chat-driven tool execution, Letta's vector recall.

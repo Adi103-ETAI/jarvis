@@ -8,9 +8,11 @@ A personal AI assistant built as an **active layer on top of the OpenCode kernel
 
 ## Status
 
-Phase 5 — memory (facts + transcript + recall + compaction) built and
-unit-tested (112 hermetic tests); live E2E pending model-quota reset. Run the
-console: `PYTHONPATH=src python3 -m jarvis`.
+Phase 5 + 5.1 — memory (facts + transcript + recall + compaction) and
+rate-limit model failover, built and unit-tested; live E2E pending
+model-quota reset. Next: Phase 6 — skills (the borrowing plan lives in
+[`docs/roadmap.md`](docs/roadmap.md)). Run the console:
+`PYTHONPATH=src python3 -m jarvis`.
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the approved architecture
 - [`docs/phase0-baseline.md`](docs/phase0-baseline.md) — live-verified Phase 0 findings
@@ -18,8 +20,9 @@ console: `PYTHONPATH=src python3 -m jarvis`.
 - [docs/phase2-gates.md](docs/phase2-gates.md) — Phase 2 safety spine (Gate A/B, broker, subject rule, **gated MCP bridge live**)
 - [docs/phase3-jarvisd.md](docs/phase3-jarvisd.md) — Phase 3: jarvisd console v0 + gated MCP bridge (ask/pending/yes-no/status, journal, bridge roundtrip tested)
 - [docs/phase4-scheduler.md](docs/phase4-scheduler.md) — Phase 4: T1 scheduler, 08:00 briefing, cycle guards (dedupe, budget, failure auto-disable, DND)
-- [docs/phase5-memory.md](docs/phase5-memory.md) — Phase 5: memory — facts, archive, recall, compaction, prompt injection, model knob
-- [docs/decisions.md](docs/decisions.md) — decision log (language, kernel-update ritual, single-machine first, borrowed designs D5, memory stance D6)
+- [docs/phase5-memory.md](docs/phase5-memory.md) — Phase 5: memory — facts, archive, recall, compaction, prompt injection, model knob + failover (§8)
+- [docs/decisions.md](docs/decisions.md) — decision log (language, kernel-update ritual, single-machine first, borrowed designs D5, memory stance D6, roadmap D7)
+- [docs/roadmap.md](docs/roadmap.md) — the borrowing plan (D5 → build order): Hermes skills/learning loop, OpenClaw gateway + channels, Letta identity + sleep-time compute, phases 6–9
 - jarvisd console: src/jarvis/console.py + src/jarvis/__main__.py — ask (fg) / `bg TEXT` / pending / `yes CODE` / `no CODE` / cancel / replay / routines / `run NAME` / `routine NAME off|on` / remember / forget / facts / recall / memory / compact / `model P/M` / models / status, live announcer, journal, turn-latency metrics
 - T1 scheduler: src/jarvis/scheduler.py + config/routines.toml — routines fire without a person present, on a dedicated session, guarded (one fire/day, no overlap, budget watchdog, failure auto-disable, DND)
 - Memory: src/jarvis/memory.py — subject-written facts (core), verbatim turn archive (archival), deterministic recall, compaction plugin that re-injects durable facts; caps in config/policy.toml `[memory]`
