@@ -61,6 +61,19 @@ max_facts = 512            # hard cap on stored facts (tighten-only storage)
 inject_max_chars = 1200    # per-turn durable-memory prompt prefix budget
 relevant_top_k = 3         # non-core facts recalled into a turn by relevance
 
+# Model failover (phase 5.1): when the kernel refuses a turn because the
+# model is rate-limited (HTTP 429/402) or a model dies mid-turn, JARVIS
+# tries the next model in this list, in order -- and the winner becomes
+# the sticky default. The list is POLICY: you approve it by writing it
+# here (same law as routines.toml); runtime never widens it. Fill it from
+# the 'models' console command. Kernel-down (connection refused) is NOT
+# failover -- no model fixes that.
+[model]
+failover = [
+  # "opencode/qwen3-coder-free",
+  # "opencode/gpt-5-nano",
+]
+
 # MCP bridge (jarvis-mcp-gate): MCP tools raise no kernel permission
 # requests in 2.1.4, so the bridge carries the gate itself -- with the SAME
 # rules as native tools (user decision 2026-10-26). mutating_tool_matches

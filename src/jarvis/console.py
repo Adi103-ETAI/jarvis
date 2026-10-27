@@ -105,6 +105,28 @@ def first_token_seconds(events, session_id, started_wall, start_index=0):
     return None
 
 
+def turn_failed(events, session_id, start_index=0):
+    """True if a kernel execution-failure event for THIS session appears in
+    the captured slice (failover signal: the model died mid-turn)."""
+    for e in events[start_index:]:
+        if str(e.get("type", "")) != "session.execution.failed":
+            continue
+        if (e.get("data") or {}).get("sessionID") == session_id:
+            return True
+    return False
+
+
+def _model_str(m):
+    return str(m.get("providerID", "?")) + "/" + str(m.get("id", "?"))
+
+
+# Kernel statuses that mean "this MODEL is exhausted", not "the request is
+# wrong": 429 rate limit / quota, 402 payment required. Kernel-down (0) and
+# bad-request (4xx others) are NOT failover material -- a different model
+# would die the same way.
+QUOTA_STATUSES = (429, 402)
+
+
 class JarvisConsole:
     def __init__(self, *, workspace=DEFAULT_WORKSPACE, model=None,
                  policy_path=None, journal_path=None, audit_path=None,
@@ -133,6 +155,15 @@ class JarvisConsole:
         # contains a whole console in tests.
         mem_cfg = (getattr(self.policy, "raw_extra", {}) or {}).get("memory") or {}
         mem_root = memory_dir or self.journal.path.parent
+        # Model failover chain (phase 5.1): read once from policy at boot.
+        # The list is written by the human (same law as routines.toml -- the
+        # file is the approval); runtime never widens it.
+        model_cfg = (getattr(self.policy, "raw_extra", {}) or {}).get("model") or {}
+        self.failover_chain = []
+        for spec in (model_cfg.get("failover") or []):
+            m = parse_model_spec(spec) if isinstance(spec, str) else None
+            if m and m not in self.failover_chain:
+                self.failover_chain.append(m)
         self.facts = FactStore(mem_root / "facts.jsonl",
                                max_facts=int(mem_cfg.get("max_facts", 512)))
         self.archive = Archive(mem_root / "archive.jsonl")
@@ -210,22 +241,68 @@ class JarvisConsole:
             self.announcer.watch_sid = sid    # routine turns narrate via scheduler
         self.worker.set_trust(sid, source)
         started_wall = time.time()
-        self._turn_start = len(self.events)
         # Durable memory rides in as background context (core facts always,
         # plus relevance-ranked extras). The ORIGINAL text stays what Gate A
         # classified and what the journal records; the prefix is labeled so
         # the kernel treats it as memory, not as fresh instructions.
         mem_block = self._memory_prefix(text) if source in ("console", "scheduled") else ""
         prompt_text = (mem_block + "\n\n" + text) if mem_block else text
-        try:
-            self.kernel.prompt(sid, prompt_text)
-        except KernelError as e:
-            return "kernel refused the turn: " + e.message
-        self.journal.add("turn-started", session_id=sid, lane=lane, text=text[:280],
-                         memory_chars=len(mem_block))
-        if lane == "bg":
-            return "launched in background -- announcer reports when it idles ('replay' reads it)."
-        reply = self.wait_turn()
+        # Model failover (phase 5.1): try the current model, then the policy
+        # chain, on rate-limit refusals (dispatch) or mid-turn model death
+        # (execution.failed). Bounded by chain length; the winner becomes
+        # the sticky default. Deterministic end to end -- no judgement here,
+        # just the ordered list the human wrote in policy.toml.
+        chain = [dict(self.model)] + [m for m in self.failover_chain if m != self.model]
+        original_model = dict(self.model)
+        failover_reason = None
+        attempt = 0
+        reply = None
+        while True:
+            model = chain[attempt]
+            if attempt > 0:
+                try:
+                    self.kernel.switch_model(sid, model["providerID"], model["id"])
+                except KernelError as e:
+                    self.journal.add("model-failover", stage="switch-refused",
+                                     model=_model_str(model), error=e.message)
+                    if attempt + 1 < len(chain):
+                        attempt += 1
+                        continue
+                    return "no failover model could be activated (last error: " + e.message + ")"
+            self._turn_start = len(self.events)
+            try:
+                self.kernel.prompt(sid, prompt_text)
+            except KernelError as e:
+                if e.status in QUOTA_STATUSES and attempt + 1 < len(chain):
+                    nxt = chain[attempt + 1]
+                    self._note_failover(model, nxt, "rate-limited", status=e.status)
+                    self.announcer.nudge("[jarvis] " + _model_str(model)
+                                         + " hit its limit -- failing over to "
+                                         + _model_str(nxt))
+                    failover_reason = "rate-limited"
+                    attempt += 1
+                    continue
+                return "kernel refused the turn: " + e.message
+            self.journal.add("turn-started", session_id=sid, lane=lane, text=text[:280],
+                             memory_chars=len(mem_block))
+            if lane == "bg":
+                self._stick_model(chain, attempt, original_model, failover_reason)
+                return "launched in background -- announcer reports when it idles ('replay' reads it)."
+            reply = self.wait_turn()
+            if turn_failed(self.events, sid, self._turn_start):
+                if attempt + 1 < len(chain):
+                    nxt = chain[attempt + 1]
+                    self._note_failover(model, nxt, "turn-failed")
+                    self.announcer.nudge("[jarvis] " + _model_str(model)
+                                         + " died mid-turn -- retrying on "
+                                         + _model_str(nxt))
+                    failover_reason = "turn-failed"
+                    attempt += 1
+                    continue        # re-prompt the same text on the next model
+                self.journal.add("turn-failed", session_id=sid,
+                                 note="execution failed; no failover models left")
+            break
+        self._stick_model(chain, attempt, original_model, failover_reason)
         ft = first_token_seconds(self.events, sid, started_wall, self._turn_start)
         self.journal.add("turn-metrics", session_id=sid, lane="fg",
                          first_token_s=(round(ft, 3) if ft is not None else None),
@@ -395,6 +472,19 @@ class JarvisConsole:
         return "no pending confirmation for code '" + code + "'."
 
     # --------------------------------------------------------------- memory
+
+    def _note_failover(self, from_m, to_m, reason, **extra):
+        self.journal.add("model-failover",
+                         **{"from": _model_str(from_m), "to": _model_str(to_m),
+                            "reason": reason, **extra})
+
+    def _stick_model(self, chain, attempt, original_model, reason):
+        """The failover winner becomes the default for future turns, so the
+        next dispatch does not repeat the dead model's refusal."""
+        if chain[attempt] != original_model:
+            self.model = dict(chain[attempt])
+            self._note_failover(original_model, self.model,
+                                reason or "failover", sticky=True)
 
     def _memory_prefix(self, text):
         """Core facts always ride in; relevance-ranked extras join when the

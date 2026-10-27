@@ -113,3 +113,29 @@ The model was never kernel-hardcoded — it was a Python default
 - [x] Model switchable per session + default + env (tested)
 - [x] Full hermetic suite green: 112 passed (72 pre-existing + 40 new)
 - [ ] Live E2E against the real kernel (blocked: model quota; rerun with the other live suites)
+
+## 8. Model failover — surviving rate limits (phase 5.1)
+
+Question that forced this: "if the OpenCode model hits its rate limit,
+how does JARVIS change it?" Before: it didn't — the turn died with
+"kernel refused", and the human ran `model P/M` by hand. Now:
+
+- **Trigger** (deterministic, no judgement): kernel refuses dispatch with
+  a QUOTA status (429 rate limit / 402 payment), OR the model dies
+  mid-turn (`session.execution.failed` event for the session).
+- **Action**: try the next model in `config/policy.toml [model] failover`,
+  in order. The session is redirected (`switch_model`, subject rule
+  enforced), the same prompt is re-dispatched, and the turn continues.
+- **Sticky**: the winner becomes the console default, so the next turn
+  does not repeat the dead model's refusal. A failed switch or a totally
+  exhausted chain surfaces a clear error; nothing retries forever.
+- **The chain is policy**: you approve it by writing it in the file
+  (same law as routines.toml — D2's spirit). Runtime never widens it;
+  the shipped default is empty (legacy behavior: refuse and report).
+  Kernel-down is NOT failover — no model fixes a dead kernel.
+- **Not failover material**: bad requests (400), unknown errors, kernel
+  unreachable — a different model would die identically.
+
+Journalled as `model-failover` (from/to/reason/sticky) and announced
+live through the announcer. Applies to console, bg, and scheduled
+(routine) turns alike, since they share `ask()`.

@@ -31,7 +31,7 @@ console: `PYTHONPATH=src python3 -m jarvis`.
 - Kernel adapter: `src/jarvis/kernel/adapter.py` — sessions, prompt, steer,
   interrupt, permissions, fork, compact, events, model ops (stdlib only)
 - Live integration tests: `tests/test_adapter_live.py` — 11/11 passed
-- Default model `opencode/glm-5.3-flash-free`; switch at runtime with `model provider/model-id` or boot with `JARVIS_MODEL=provider/model-id` (subject-ruled, journalled)
+- Default model `opencode/glm-5.3-flash-free`; switch with `model provider/model-id` or `JARVIS_MODEL` env; auto-failover on rate limits via `config/policy.toml [model] failover` (you write the chain — file is the approval)
 - `serena` MCP: connected **through jarvis-mcp-gate** (discovery & reads flow free; mutating calls gated by one-time code) · `rea` MCP: registered, **disabled** (until Gate B)
 - Feynman `0.5.57`: CLI-only (no MCP server) — wrapped as active-layer tools
 

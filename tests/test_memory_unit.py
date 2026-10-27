@@ -488,3 +488,145 @@ def test_status_line_includes_memory(jc):
     jc.handle("remember that I like tea")
     status = jc.handle("status")
     assert "memory    : 1 facts" in status
+
+
+# ------------------------------------------------------------ model failover
+
+from jarvis.console import QUOTA_STATUSES, turn_failed
+from jarvis.kernel.adapter import KernelError
+
+
+def test_turn_failed_detection():
+    ev = [{"type": "session.execution.failed", "data": {"sessionID": "s1"}},
+          {"type": "session.text.delta", "data": {"sessionID": "s2"}},
+          {"type": "session.execution.failed", "data": {"sessionID": "s2"}}]
+    assert turn_failed(ev, "s1", 0) is True
+    assert turn_failed(ev, "s1", 1) is False          # sliced out
+    assert turn_failed(ev, "s3", 0) is False
+    assert turn_failed([], "s1") is False
+
+
+def test_failover_on_rate_limit_at_dispatch(jc):
+    jc.registry.add("ses_f")
+    jc.session = {"id": "ses_f"}
+    jc.failover_chain = [{"providerID": "opencode", "id": "backup-1"}]
+    jc.kernel.wait = lambda sid, timeout=5.0: {}
+    calls = {"prompt": 0, "switch": []}
+
+    def fake_prompt(sid, text, **kw):
+        calls["prompt"] += 1
+        if calls["prompt"] == 1:
+            raise KernelError("quota exhausted", status=429)
+        return {"id": "msg_1"}
+
+    def fake_switch(sid, provider, mid):
+        calls["switch"].append((sid, provider, mid))
+        return {"ok": True}
+
+    jc.kernel.prompt = fake_prompt
+    jc.kernel.switch_model = fake_switch
+    out = jc.ask("hello", lane="fg")
+    assert calls["prompt"] == 2
+    assert calls["switch"] == [("ses_f", "opencode", "backup-1")]
+    assert jc.model == {"providerID": "opencode", "id": "backup-1"}   # sticky
+    fail = jc.journal.tail(10, kind="model-failover")[-1]
+    assert fail["reason"] == "rate-limited" and fail["sticky"] is True
+
+
+def test_failover_exhausted_returns_error(jc):
+    jc.registry.add("ses_f")
+    jc.session = {"id": "ses_f"}
+    jc.failover_chain = [{"providerID": "opencode", "id": "backup-1"}]
+    calls = {"prompt": 0}
+
+    def fake_prompt(sid, text, **kw):
+        calls["prompt"] += 1
+        raise KernelError("quota exhausted", status=429)
+
+    jc.kernel.prompt = fake_prompt
+    jc.kernel.switch_model = lambda sid, p, m: {"ok": True}
+    out = jc.ask("hello", lane="fg")
+    assert "kernel refused the turn" in out
+    assert calls["prompt"] == 2                       # current + 1 failover
+    assert jc.model["id"] == "glm-5.3-flash-free"     # nothing sticky on total failure
+
+
+def test_non_quota_error_does_not_failover(jc):
+    jc.registry.add("ses_f")
+    jc.session = {"id": "ses_f"}
+    jc.failover_chain = [{"providerID": "opencode", "id": "backup-1"}]
+    calls = {"prompt": 0}
+
+    def fake_prompt(sid, text, **kw):
+        calls["prompt"] += 1
+        raise KernelError("bad request", status=400)
+
+    jc.kernel.prompt = fake_prompt
+    jc.ask("hello", lane="fg")
+    assert calls["prompt"] == 1                       # no failover on 400
+
+
+def test_midturn_death_retries_on_next_model(jc):
+    jc.registry.add("ses_f")
+    jc.session = {"id": "ses_f"}
+    jc.failover_chain = [{"providerID": "opencode", "id": "backup-1"}]
+    state = {"attempt": 0}
+
+    def fake_prompt(sid, text, **kw):
+        state["attempt"] += 1
+        return {"id": "msg_" + str(state["attempt"])}
+
+    def fake_wait(sid, timeout=5.0):
+        if state["attempt"] == 1:                     # model 1 dies mid-turn
+            jc.events.append({"type": "session.execution.failed",
+                              "data": {"sessionID": sid}})
+            return {}
+        jc.events.append({"type": "session.text.delta",
+                          "data": {"sessionID": sid, "text": "saved answer"},
+                          "created": __import__("time").time()})
+        return {}
+
+    jc.kernel.prompt = fake_prompt
+    jc.kernel.wait = fake_wait
+    jc.kernel.switch_model = lambda sid, p, m: {"ok": True}
+    out = jc.ask("save this", lane="fg")
+    assert out == "saved answer"
+    assert state["attempt"] == 2
+    assert jc.model["id"] == "backup-1"
+    fail = jc.journal.tail(10, kind="model-failover")[-1]
+    assert fail["reason"] == "turn-failed"
+
+
+def test_failover_chain_loaded_from_policy(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENCODE_PASSWORD", "unit-test")
+    policy = tmp_path / "policy.toml"
+    policy.write_text('[model]\nfailover = ["opencode/backup-1", "x/", 42]\n',
+                      encoding="utf-8")
+    console = JarvisConsole(
+        policy_path=str(policy),
+        journal_path=tmp_path / "journal.jsonl",
+        audit_path=tmp_path / "audit.jsonl",
+        pending_root=tmp_path / "pending",
+        routines_path=str(tmp_path / "routines.toml"),
+    )
+    try:
+        assert console.failover_chain == [{"providerID": "opencode", "id": "backup-1"}]
+    finally:
+        console.close()
+
+
+def test_empty_chain_keeps_legacy_behavior(jc):
+    jc.registry.add("ses_f")
+    jc.session = {"id": "ses_f"}
+    assert jc.failover_chain == []                    # shipped policy: empty
+
+    def fake_prompt(sid, text, **kw):
+        raise KernelError("quota exhausted", status=429)
+
+    jc.kernel.prompt = fake_prompt
+    out = jc.ask("hello", lane="fg")
+    assert out == "kernel refused the turn: quota exhausted"
+
+
+def test_quota_statuses_constant():
+    assert 429 in QUOTA_STATUSES and 402 in QUOTA_STATUSES and 0 not in QUOTA_STATUSES
