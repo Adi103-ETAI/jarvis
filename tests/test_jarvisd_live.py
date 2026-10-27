@@ -18,7 +18,8 @@ WORKSPACE = "/home/sonic/work-jarvis"
 def jc(tmp_path):
     console = JarvisConsole(workspace=WORKSPACE,
                             journal_path=tmp_path / "journal.jsonl",
-                            audit_path=tmp_path / "audit.jsonl")
+                            audit_path=tmp_path / "audit.jsonl",
+                            pending_root=tmp_path / "pending")
     yield console
     console.close()
 

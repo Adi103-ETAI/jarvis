@@ -18,6 +18,12 @@ note = "read-only git inspection"
 pattern = '^\s*python3 -c .*(print|len|sum|min|max)\b'
 note = "tiny pure-computation snippets"
 
+# Test runs are the development loop; they exist to REPORT, not destroy.
+# (The forbiddens above still veto any destructive content inside the chain.)
+[[benign.shell]]
+pattern = '^(cd\s+\S+\s*&&\s*)?(PYTHONPATH=\S+\s+)*(timeout\s+\d+\s+)?(PYTHONPATH=\S+\s+)?python3(3(\.\d+)?)?\s+-m\s+pytest\b'
+note = "test runs"
+
 # NEVER runnable by JARVIS, from any trust level, even after a confirm.
 [[forbiddens]]
 pattern = '(^|[;&|]\s*)rm\s+(-[a-zA-Z]+\s+)*-[a-zA-Z]*r[a-zA-Z]*f|(^|[;&|]\s*)rm\s+-[a-zA-Z]*f[a-zA-Z]*r'
@@ -47,3 +53,17 @@ mutating = "confirm"      # standing jobs still confirm; once you trust the loop
 
 # Runtime action names (kernel 2.1.4 uses shell, NOT bash)
 mutating_actions = ["shell", "edit", "write", "webfetch", "external_directory", "task"]
+
+# MCP bridge (jarvis-mcp-gate): MCP tools raise no kernel permission
+# requests in 2.1.4, so the bridge carries the gate itself -- with the SAME
+# rules as native tools (user decision 2026-10-26). mutating_tool_matches
+# names the tool-name substrings that COULD mutate; policy then judges the
+# call's content: benign allowlisted commands flow free, forbidden content
+# is refused inline, everything else parks for a human one-time code.
+# Discovery/introspection always flow free -- JARVIS sees every tool.
+[mcp]
+mutating_tool_matches = [
+  "execute", "shell", "replace", "insert_", "create_", "write", "delete",
+  "remove", "rename", "run_", "record_release", "capture_", "submit_",
+  "act_", "disable", "enable", "kill_", "patch_", "put_", "set_", "touch",
+]

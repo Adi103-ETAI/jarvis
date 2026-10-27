@@ -42,21 +42,32 @@ doorkeeper rather than a second opinion machine:
    - echo -> auto-approved once -> executed;
    - touch -> parked with a code -> human approves -> executed; code reuse fails;
    - ambient trust -> automatic reject + audit trail.
-4. **KNOWN BYPASS #1**: MCP-provided tools raise NO permission requests in
-   2.1.4. Even under a full shell-deny, a session executed a shell command
-   through serena's execute_shell_command (asserted in test_04 so the fact
-   is pinned). Mitigation: JARVIS-owned sessions must not expose
-   execution-capable MCP servers; becomes a jarvisd rule with the Phase-3
-   turn-runner, and worth an upstream report.
+4. **KNOWN BYPASS #1 closed** (user direction 2026-10): MCP-provided tools
+   raise NO kernel permission requests in 2.1.4, so execution could sneak
+   through serena's execute_shell_command even under a shell-deny. The
+   gated MCP bridge now carries Gate B for MCP instead:
+   - [`src/jarvis/mcp_gate.py`](src/jarvis/mcp_gate.py) — stdio proxy; discovery
+     and reads flow through untouched (JARVIS sees every tool); mutating
+     calls are judged by the SAME Gate B rules as native tools (benign run
+     free, forbidden refused inline, everything else parks with a one-time
+     code). Nothing auto-solves.
+   - [`scripts/jarvis-mcp-gate`](scripts/jarvis-mcp-gate) — launcher the
+     kernel spawns per MCP server.
+   - [`config/policy.toml`](config/policy.toml) `[mcp]` — tool-name substrings
+     that COULD mutate; content judged by policy (benign allowlist +
+     forbiddens + trust), same as native.
+   - Kernel config now routes serena through `jarvis-mcp-gate`; verified live
+     via GET /api/mcp → serena **connected**.
+   Mitigation replaces the old "exclude MCP from JARVIS sessions" idea —
+   JARVIS keeps full system knowledge through MCP; only execution is gated.
 
 ## 4. Still open (Phase 2 tail)
 
+- [x] Gated MCP bridge live — bypass closed (serena routed through
+      jarvis-mcp-gate; connected verified live).
 - [ ] OS sandbox for turns (bwrap/userns vs dedicated distro) — user decision
       pending; not blocking today because kernel asks cover interactive
       mutability and forbidden patterns cover the extremes.
-- [ ] Code presenter: pending confirmations are currently solveable from
-      inside the daemon; the console/voice presenter ships with the
-      Phase-3 turn-runner.
 - [ ] 'always' patterns (save[]) are refused at runtime by design; if ever
       enabled they belong in policy.toml, verified at startup.
 
@@ -64,3 +75,8 @@ doorkeeper rather than a second opinion machine:
 
 - tests/test_gates_unit.py — 16 passed (policy, Gate A, broker, audit, subject rule)
 - tests/test_gateb_live.py — 3 passed + 1 documented-bypass assertion
+- tests/test_mcp_gate.py — 14 passed (store semantics, classification,
+  bridge→fake-server roundtrip: pass-through discovery, free reads, granted
+  mutations, refused mutations)
+- tests/test_mcp_gate.py integration runs the real bridge as a subprocess —
+  the same way the kernel will spawn it.

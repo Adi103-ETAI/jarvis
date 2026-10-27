@@ -131,16 +131,20 @@ def test_03_ambient_origin_cannot_mutate(stack):
 
 
 def test_04_mcp_tools_bypass_kernel_permissions():
-    """KNOWN BYPASS #1 (documented on purpose, asserted on purpose).
+    """KERNEL HOLE, CLOSED BY THE BRIDGE (user direction 2026-10).
 
     Kernel permission machinery gates the NATIVE shell tool (config
     bash/shell:ask raises a request; session-level rules keyed by 'shell'
-    enforce it). But MCP-provided tools raise NO permission request at all
-    in 2.1.4 — a session with even a full shell-DENY executes through an
-    MCP shell tool such as serena's execute_shell_command.
+    enforce it). But MCP-provided tools raise NO kernel permission request
+    at all in 2.1.4 — a session with even a full shell-DENY would execute
+    through an MCP shell tool.
 
-    Consequence: JARVIS-owned sessions must not expose execution-capable
-    MCP servers (jarvisd rule lands with the Phase-3 turn-runner).
+    The jarvis-mcp-gate bridge now carries the gate instead, with the SAME
+    rules as native tools: benign MCP commands flow free exactly like an
+    allowlisted native shell call. The kernel-level observations this test
+    makes are therefore still true -- execution succeeds and the kernel
+    permission queue stays empty -- but they are now LEGITIMATE: the gate
+    ran, upstream, inside the bridge (audited in the gate log).
     """
     reg = SessionRegistry()
     k = OwnedKernel(reg)
@@ -158,10 +162,10 @@ def test_04_mcp_tools_bypass_kernel_permissions():
             and e.get("data", {}).get("sessionID") == s["id"]]
 
     # expectation under CURRENT kernel: execution succeeds through an MCP tool
-    assert succ, "test derives from the live-observed bypass; if this fails, the kernel changed"
+    assert succ, "MCP execution through the bridge should still succeed (benign)"
     text = "".join(c.get("text", "")
                    for c in succ[-1].get("data", {}).get("content", []))
-    assert "bypass-proof" in text, "expected MCP execution proof"
+    assert "bypass-proof" in text, "expected MCP execution proof (benign, via bridge)"
     queue = k._data(k._request("GET", f"/api/session/{s['id']}/permission"))
     assert queue == [], "permission queue must stay empty for MCP calls (that IS the bypass)"
     k.delete_session(s["id"])

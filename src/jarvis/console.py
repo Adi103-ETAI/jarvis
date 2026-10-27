@@ -16,6 +16,7 @@ the gate audit log.
 from __future__ import annotations
 
 import datetime as _dt
+import time
 
 from jarvis.audit import GateLog
 from jarvis.confirm import ConfirmationBroker
@@ -24,6 +25,7 @@ from jarvis.gates.tool import ToolGate
 from jarvis.gates.worker import PermissionWorker
 from jarvis.journal import Journal
 from jarvis.kernel.adapter import KernelError
+from jarvis.pending_store import PendingStore
 from jarvis.policy import Policy
 from jarvis.registry import OwnedKernel, SessionRegistry
 
@@ -43,11 +45,15 @@ HELP = """commands:
 
 class JarvisConsole:
     def __init__(self, *, workspace=DEFAULT_WORKSPACE, model=None,
-                 policy_path=None, journal_path=None, audit_path=None):
+                 policy_path=None, journal_path=None, audit_path=None,
+                 pending_root=None):
         self.workspace = workspace
         self.model = model or dict(DEFAULT_MODEL)
         self.audit = GateLog(audit_path)
         self.journal = Journal(journal_path)
+        # Resolution channel shared with the MCP bridge process: same files,
+        # so a "yes CODE" typed here unlocks a call parked in jarvis-mcp-gate.
+        self.store = PendingStore(pending_root)
         self.registry = SessionRegistry()
         self.kernel = OwnedKernel(self.registry)
         self.policy = Policy(policy_path)
@@ -144,11 +150,17 @@ class JarvisConsole:
             "model     : " + str(self.model.get("providerID", "?")) + "/" + str(self.model.get("id", "?")),
             "session   : " + (self.session["id"] if self.session else "(none yet)"),
             "owned     : " + str(len(sids)) + " session(s)",
-            "awaiting  : " + str(len(self.worker.pending_list())) + " confirmation(s)",
+            "awaiting  : " + str(len(self.worker.pending_list()) + len(self.store.list()))
+            + " confirmation(s)",
         ])
 
     def _pending(self):
-        pend = self.worker.pending_list()
+        now = time.time()
+        pend = list(self.worker.pending_list())
+        for p in self.store.list():
+            pend.append({"code": p["code"],
+                         "age_s": round(now - p.get("ts", now), 1),
+                         "description": p.get("description", "(no description)")})
         if not pend:
             return "no confirmations waiting."
         return "\n".join(p["code"] + "  (" + str(p["age_s"]) + "s ago)  " + p["description"]
@@ -161,6 +173,13 @@ class JarvisConsole:
             self.journal.add("confirmation", code=code,
                              outcome="approved" if accept else "refused")
             return "approved." if accept else "refused -- the kernel continues accordingly."
+        if self.store.decide(code, accept):
+            self.journal.add("confirmation", code=code,
+                             outcome="approved" if accept else "refused",
+                             channel="mcp-bridge")
+            return ("approved -- the MCP tool call continues."
+                    if accept else
+                    "refused -- the MCP tool call will be told no.")
         return "no pending confirmation for code '" + code + "'."
 
     # ---------------------------------------------------------------- exit

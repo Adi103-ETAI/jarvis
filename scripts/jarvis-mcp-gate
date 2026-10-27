@@ -1,0 +1,4 @@
+#!/bin/sh
+# Launcher for the gated MCP bridge so the kernel can spawn it from any cwd.
+export PYTHONPATH=/home/sonic/work-jarvis/src
+exec python3 -m jarvis.mcp_gate "$@"

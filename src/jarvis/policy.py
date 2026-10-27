@@ -26,6 +26,7 @@ class Policy:
     def __init__(self, path: str | Path | None = None):
         p = Path(path) if path else DEFAULT_PATH
         data = tomllib.loads(p.read_text(encoding="utf-8"))
+        self.raw_extra = data
         self._forbidden = [(re.compile(r["pattern"]), r.get("note", ""))
                            for r in data.get("forbiddens", [])]
         self._benign: list[tuple[str, re.Pattern, str]] = []
@@ -36,6 +37,17 @@ class Policy:
         self._mutating_actions = set(data.get("mutating_actions") or
                                      ["shell", "edit", "write", "webfetch",
                                       "external_directory", "task"])
+
+    def forbidden_note(self, text: str) -> str | None:
+        """Return the note of the first forbidden pattern matching text, else None."""
+        for rx, note in self._forbidden:
+            if rx.search(text):
+                return note
+        return None
+
+    def mcp_mutating_tokens(self) -> list[str]:
+        raw = self.raw_extra
+        return list(raw.get("mcp", {}).get("mutating_tool_matches", []))
 
     def decide(self, action: str, resources: list[str], trust: str) -> Verdict:
         blob = ";".join(str(r) for r in resources) if resources else ""
