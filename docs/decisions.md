@@ -51,3 +51,33 @@ nothing is imported wholesale; everything passes through the gates:
 
 Law carried forward: borrowed designs change the active layer's memory and
 presence; they never widen what may execute without Gate B.
+
+## D6 — Memory v0: capture over extraction (2026-10-27)
+
+Phase 5 needed a stance on the question every memory system dodges: WHO
+decides what is remembered? Letta and Hermes both answer "the model,
+during the conversation". JARVIS cannot, because the active layer's laws
+forbid it from thinking: a model in the decision path is a policy engine
+that cannot be audited.
+
+The v0 answer:
+
+- **Facts are captured, not extracted.** The subject types
+  `remember TEXT` at the console — the only trust level that is
+  authority — and it is stored verbatim. FactStore.add refuses every
+  other source at the store level.
+- **The transcript is archived verbatim**, per finished turn, and recall
+  over it is deterministic search. Cheap, auditable, reproducible.
+- **Summarization/extraction belongs to the kernel** (where thinking
+  lives), so a future "memory ritual" can have the KERNEL propose facts
+  for human approval — mirroring the routine-file pattern (D2's spirit):
+  proposals are made by the model, authority is granted by the human.
+- **Injection is context, not instruction.** Memory blocks are labeled
+  background; they widen what JARVIS knows, never what he may do.
+
+Letta's core/archival split is kept (identity+preference facts = core,
+always in context; everything else = archival, relevance-ranked). Hermes
+skills/procedural memory is deferred until the skills phase; the fact
+schema (category/text/source) was chosen so procedures can land there
+first. Memory caps live in policy.toml `[memory]` because how much an
+assistant may remember IS policy.

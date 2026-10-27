@@ -54,6 +54,13 @@ mutating = "confirm"      # standing jobs still confirm; once you trust the loop
 # Runtime action names (kernel 2.1.4 uses shell, NOT bash)
 mutating_actions = ["shell", "edit", "write", "webfetch", "external_directory", "task"]
 
+# Phase 5 memory — how much JARVIS may remember and inject. Facts are
+# subject-written only (console); these caps bound what memory may become.
+[memory]
+max_facts = 512            # hard cap on stored facts (tighten-only storage)
+inject_max_chars = 1200    # per-turn durable-memory prompt prefix budget
+relevant_top_k = 3         # non-core facts recalled into a turn by relevance
+
 # MCP bridge (jarvis-mcp-gate): MCP tools raise no kernel permission
 # requests in 2.1.4, so the bridge carries the gate itself -- with the SAME
 # rules as native tools (user decision 2026-10-26). mutating_tool_matches
