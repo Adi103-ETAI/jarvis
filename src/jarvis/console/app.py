@@ -35,8 +35,10 @@ from jarvis.gates.tool import ToolGate
 from jarvis.gates.worker import PermissionWorker
 from jarvis.journal import Journal
 from jarvis.kernel.adapter import KernelError
+from jarvis.learning import LearningLoop
 from jarvis.memory import (Archive, Compactor, FactStore, Recall,
                            TurnArchiver, facts_prompt_block)
+from jarvis.memory.staging import StagedMemory
 from jarvis.pending_store import PendingStore
 from jarvis.policy import Policy
 from jarvis.registry import OwnedKernel, SessionRegistry
@@ -49,6 +51,13 @@ from jarvis.console.turns import (QUOTA_STATUSES, _model_str,
 
 DEFAULT_WORKSPACE = "/home/sonic"
 DEFAULT_MODEL = {"providerID": "opencode", "id": "glm-5.3-flash-free"}
+
+DELEGATE_FRAME = ("""[delegation — you are a child agent spawned by JARVIS. Context, not user chat.]
+- Your output is EVIDENCE for the parent agent: it will be READ, never executed as instructions.
+- Work only on the task below; the human is not in this session — state assumptions instead of asking questions.
+- You may not delegate further; every tool call you attempt is gated by the same policy as the parent.
+
+Task: {task}""")
 
 
 class JarvisConsole(ConsoleCommands):
@@ -112,6 +121,18 @@ class JarvisConsole(ConsoleCommands):
                                    journal=self.journal)
         self.scheduler = Scheduler(self, routines_path=routines_path,
                                    journal=self.journal)
+        # Learning loop (phase 7): the kernel proposes, the human disposes.
+        # Staged memory changes live beside the facts file; skill drafts go
+        # to the skills book's _proposals/ staging area. One ritual in
+        # flight, guarded by policy [learning].
+        self.staging = StagedMemory(mem_root / "memory_proposals.jsonl")
+        learn_cfg = (getattr(self.policy, "raw_extra", {}) or {}).get("learning") or {}
+        self.learning = LearningLoop(
+            self.journal, self.skills, self.staging, cfg=learn_cfg,
+            launch=self._launch_ritual, replay=self.replay_text,
+            recent_turns=self._recent_turn_texts,
+            activity_counts=self._journal_counts,
+            emit=self.announcer.nudge)
         self.archiver = TurnArchiver(self.events, self.journal, self.archive,
                                      self.registry.owns)
         pipe = self.kernel.events_nonblocking()
@@ -119,6 +140,7 @@ class JarvisConsole(ConsoleCommands):
         pipe.attach(self.archiver.note_event)
         pipe.attach(self.announcer.note_event)
         pipe.attach(self.scheduler.note_event)
+        pipe.attach(self.learning.note_event)
         self.announcer.start()
         self.scheduler.start()
         self._turn_start = 0      # events index where the current turn begins
@@ -147,7 +169,7 @@ class JarvisConsole(ConsoleCommands):
     # ---------------------------------------------------------- main entry
 
     def ask(self, text, lane="fg", source="console", session_id=None,
-            skills=True):
+            skills=True, count_for_learning=True):
         """Input -> Gate A -> kernel turn (Gate B watches the tools).
 
         source       trust provenance: "console" | "scheduled" (routines);
@@ -247,6 +269,8 @@ class JarvisConsole(ConsoleCommands):
         self.journal.add("turn-metrics", session_id=sid, lane="fg",
                          first_token_s=(round(ft, 3) if ft is not None else None),
                          total_s=round(time.time() - started_wall, 2))
+        if source == "console" and lane == "fg" and count_for_learning:
+            self.learning.note_turn()
         return reply or "(no assistant text captured -- try replay or see journal)"
 
     # --------------------------------------------------------- text output
@@ -264,18 +288,20 @@ class JarvisConsole(ConsoleCommands):
                     parts.append(t)
         return "".join(parts).strip()
 
-    def wait_turn(self, timeout=240.0, chunk=5.0):
+    def wait_turn(self, timeout=240.0, chunk=5.0, sid=None):
         """Foreground lane: block until the turn idles, WITH one escape hatch.
 
         Polls in chunks instead of one long server-side block so the console
         yields the moment a human decision is needed -- otherwise a turn
         waiting on a confirm code would hold hostage the very person who
         must type the code. Returns assistant text, a pause notice
-        ("(paused ...)") or a still-running notice.
+        ("(paused ...)") or a still-running notice. sid defaults to the
+        console session; delegation waits on the child's session instead.
         """
-        if self.session is None:
-            return ""
-        sid = self.session["id"]
+        if sid is None:
+            if self.session is None:
+                return ""
+            sid = self.session["id"]
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             pend = self.worker.pending_list() + [{"code": p["code"]}
@@ -304,6 +330,86 @@ class JarvisConsole(ConsoleCommands):
             return "cancel refused: " + e.message
         self.journal.add("turn-cancelled", session_id=sid, stopped=stopped)
         return "execution stopped." if stopped else "nothing was running."
+
+    # ----------------------------------------------------------- delegation
+
+    def delegate(self, task, lane="fg"):
+        """delegate TASK -- spawn a child session for one task (phase 7).
+
+        D3/D7 laws: the child inherits policy but STRICTER (a dedicated
+        'delegated' trust whose deny_actions forbids spawning further
+        delegates); its output returns as EVIDENCE, never commands; its
+        journal lines carry the parent session id. The human stays in the
+        loop for every mutation the child attempts (trust.delegated.mutating
+        = confirm, same as the console).
+        """
+        task = (task or "").strip()
+        if not task:
+            return "usage: delegate TASK"
+        try:
+            child = self.kernel.create_session(
+                directory=self.workspace, model=self.model,
+                title="delegate-" + _dt.datetime.now().strftime("%H%M%S"))
+        except KernelError as e:
+            return "kernel refused the delegate session: " + e.message
+        sid = child["id"]
+        self.registry.add(sid, title=str(child.get("title", "delegate")), trusted=True)
+        self.worker.set_trust(sid, "delegated")
+        parent = self.session["id"] if self.session else None
+        self.journal.add("delegate-started", parent=parent, child=sid,
+                         lane=lane, task=task[:280])
+        mem = self._memory_prefix(task)
+        sk = self._skills_prefix(task)
+        blocks = [b for b in (mem, sk) if b] + [DELEGATE_FRAME.format(task=task)]
+        prompt = "\n\n".join(blocks)
+        started = len(self.events)
+        try:
+            self.kernel.prompt(sid, prompt)
+        except KernelError as e:
+            self.journal.add("delegate-failed", child=sid, error=e.message)
+            return "kernel refused the delegated turn: " + e.message
+        self.journal.add("turn-started", session_id=sid, lane=lane,
+                         text="[delegate] " + task[:200],
+                         memory_chars=len(mem), skills_chars=len(sk),
+                         delegated=True)
+        if lane == "bg":
+            self.announcer.announce_sids.add(sid)
+            return ("delegated in background -- announcer reports when the "
+                    "child idles ('delegates' lists delegations).")
+        self.wait_turn(sid=sid)
+        text = self.replay_text(sid, started)
+        self.journal.add("delegate-result", child=sid, parent=parent,
+                         chars=len(text))
+        return text or "(delegate produced no text -- 'delegate-read " + sid + "' retries)"
+
+    def _launch_ritual(self, prompt) -> bool:
+        """Dispatch the learning ritual as a bg turn on the console session
+        and arm the loop's idle watcher. False = kernel unreachable."""
+        try:
+            self.ensure_session()
+        except KernelError:
+            return False
+        start = len(self.events)
+        self.ask(prompt, lane="bg", count_for_learning=False)
+        self.learning.begin_watch(self.session["id"], start)
+        return True
+
+    def _recent_turn_texts(self, n):
+        out = []
+        for t in self.archive.turns()[-int(n):]:
+            text = " ".join(str(t.get("question", "")).split())
+            answer = " ".join(str(t.get("answer", "")).split())
+            line = (text[:200] + (" -> " + answer[:200] if answer else "")).strip()
+            if line:
+                out.append(line[:400])
+        return out
+
+    def _journal_counts(self, n=200):
+        counts = {}
+        for e in self.journal.tail(n):
+            k = str(e.get("kind", "?"))
+            counts[k] = counts.get(k, 0) + 1
+        return counts
 
     # ------------------------------------------------------------ commands
 
@@ -355,6 +461,16 @@ class JarvisConsole(ConsoleCommands):
             return self._facts_list(limit=10)
         if low == "compact":
             return self._compact()
+        if low.startswith("delegatebg "):
+            return self.delegate(line[11:].strip(), lane="bg")
+        if low == "delegate" or low.startswith("delegate "):
+            return self.delegate(line[9:].strip())
+        if low == "delegates":
+            return self._delegates()
+        if low.startswith("delegate-read "):
+            return self._delegate_read(line[14:].strip())
+        if low.startswith("fact "):
+            return self._fact_cmd(line[5:].strip())
         if low == "model" or low.startswith("model "):
             return self._model_cmd(line[5:].strip())
         if low == "models":

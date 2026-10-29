@@ -55,12 +55,24 @@ class Policy:
         for rx, note in self._forbidden:
             if rx.search(blob):
                 return Verdict("reject", "forbiddens", note)
-        # 2) allowlisted read-only commands run without the human
+        # 2) per-trust deny list — STRicter inheritance for delegated turns
+        #    (phase 7). Default: a delegate may never spawn further
+        #    delegates. Checked BEFORE the benign allowlist: inheritance
+        #    only ever removes permissions.
+        stanza = self._trust.get(trust) or {}
+        deny = stanza.get("deny_actions")
+        if deny is None:
+            deny = ["task"] if trust == "delegated" else []
+        if action in deny:
+            return Verdict("reject", "trust.%s.deny_actions" % trust,
+                           "'%s' is denied for trust '%s' (delegation adds "
+                           "restriction, never permission)" % (action, trust))
+        # 3) allowlisted read-only commands run without the human
         rules_for_action = [entry for entry in self._benign if entry[0] == action]
         if rules_for_action and resources:
             if all(any(rx.search(res) for _, rx, _ in rules_for_action) for res in resources):
                 return Verdict("once", f"benign.{action}", "allowlisted read-only command")
-        # 3) mutating actions: the trust level decides the plan
+        # 4) mutating actions: the trust level decides the plan
         if action in self._mutating_actions:
             plan = (self._trust.get(trust) or {}).get("mutating", "confirm")
             if plan == "deny":

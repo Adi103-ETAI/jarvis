@@ -38,6 +38,9 @@ think (D6); classification stays rule-based and auditable.
 
 ## Phase 7 — learning loop + delegation + self-editing memory (Hermes + Letta)
 
+Shipped 2026-10-29 — see docs/phase7-learning.md for the build and the
+Hermes study behind it. Summary:
+
 - **Learning loop = the proposal pattern.** After compaction or N idle
   turns, a kernel ritual reviews archive + journal and drafts a skill
   proposal into `skills/_proposals/`. The subject approves at the console
@@ -111,6 +114,11 @@ deterministic, auditable, reproducible — unless a decision revises D6).
   body on deterministic name match or `skill NAME TASK`), `_proposals/`
   staging area reserved and invisible, skills-propose/Gate-B-disposes.
   See docs/phase6-skills.md.
+- **Phase 7 (Hermes + Letta):** learning loop ritual (kernel drafts
+  skill + memory proposals after compaction / N turns, guarded),
+  staged-memory approval (`fact approve|reject`), delegation
+  (`delegate TASK`, `delegated` trust with deny_actions, evidence-not-
+  commands). See docs/phase7-learning.md.
 
 ## Standing prerequisites (not phase-numbered)
 

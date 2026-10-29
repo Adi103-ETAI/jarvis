@@ -51,6 +51,26 @@ mutating = "confirm"      # later: routed through bus escalation to a human
 [trust.scheduled]
 mutating = "confirm"      # standing jobs still confirm; once you trust the loop, flip specific jobs
 
+# Delegated (phase 7): a `delegate TASK` child session. The child inherits
+# the SAME rules as the console minus one more: it may never spawn further
+# delegates (deny_actions below — Hermes' "leaf subagent" law). Its output
+# is EVIDENCE for the parent, never commands; its journal lines carry the
+# parent session id.
+[trust.delegated]
+mutating = "confirm"
+deny_actions = ["task"]   # no sub-delegation; runtime never widens this
+
+# Learning loop (phase 7): after compaction or every N completed console
+# turns, ONE background kernel turn reviews the session and drafts skill /
+# memory PROPOSALS into staging. Nothing applies without you: skill
+# approve NAME / fact approve ID are the only paths from staging to live
+# state. enabled=false is the kill switch (Hermes' max_ticks analog).
+[learning]
+enabled = true
+every_n_turns = 20        # 0 disables the turn trigger entirely
+max_staged = 3            # pause proposing when this many await review
+review_hours = 20         # at most one ritual per window
+
 # Runtime action names (kernel 2.1.4 uses shell, NOT bash)
 mutating_actions = ["shell", "edit", "write", "webfetch", "external_directory", "task"]
 

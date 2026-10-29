@@ -8,10 +8,11 @@ A personal AI assistant built as an **active layer on top of the OpenCode kernel
 
 ## Status
 
-Phase 6 — skills (procedural memory, Hermes-adapted) built and
-unit-tested on top of Phase 5 memory + 5.1 failover; live E2E pending
-model-quota reset. Next: Phase 7 — learning loop + delegation (the plan
-lives in [`docs/roadmap.md`](docs/roadmap.md)). Run the console:
+Phase 7 — learning loop + self-editing memory + delegation (Hermes/
+Letta-adapted, kernel proposes / human disposes) built and unit-tested
+on top of Phase 5 memory, 5.1 failover and 6 skills; live E2E pending
+model-quota reset. Next: Phase 8 — messaging gateway + channels (the
+plan lives in [`docs/roadmap.md`](docs/roadmap.md)). Run the console:
 `PYTHONPATH=src python3 -m jarvis`.
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the approved architecture
@@ -22,11 +23,12 @@ lives in [`docs/roadmap.md`](docs/roadmap.md)). Run the console:
 - [docs/phase4-scheduler.md](docs/phase4-scheduler.md) — Phase 4: T1 scheduler, 08:00 briefing, cycle guards (dedupe, budget, failure auto-disable, DND)
 - [docs/phase5-memory.md](docs/phase5-memory.md) — Phase 5: memory — facts, archive, recall, compaction, prompt injection, model knob + failover (§8)
 - [docs/phase6-skills.md](docs/phase6-skills.md) — Phase 6: skills — procedural memory, SKILL.md format, progressive disclosure, deterministic matching, `skill` commands
+- [docs/phase7-learning.md](docs/phase7-learning.md) — Phase 7: learning loop ritual, staged memory + approvals, delegation with deny-list (Hermes study included)
 - [docs/decisions.md](docs/decisions.md) — decision log (language, kernel-update ritual, single-machine first, borrowed designs D5, memory stance D6, roadmap D7)
 - [docs/roadmap.md](docs/roadmap.md) — the borrowing plan (D5 → build order): Hermes skills/learning loop, OpenClaw gateway + channels, Letta identity + sleep-time compute, phases 6–9
 - jarvisd console: `src/jarvis/console/` package — `app.py` (core loop, ask +
   failover, dispatch) + `commands.py` (command surface) + `turns.py` (scan
-  helpers); entry `src/jarvis/__main__.py` — ask (fg) / `bg TEXT` / pending / `yes CODE` / `no CODE` / cancel / replay / routines / `run NAME` / `routine NAME off|on` / remember / forget / facts / recall / memory / compact / `model P/M` / models / `skill` / `skill NAME` / `skill NAME TASK` / status, live announcer, journal, turn-latency metrics
+  helpers); entry `src/jarvis/__main__.py` — ask (fg) / `bg TEXT` / pending / `yes CODE` / `no CODE` / cancel / replay / routines / `run NAME` / `routine NAME off|on` / remember / forget / facts / recall / memory / compact / `model P/M` / models / `skill` / `skill NAME [TASK]` / `skill proposals|approve|reject` / `fact proposals|approve|reject` / `delegate TASK` / `delegatebg TASK` / delegates / `delegate-read SID` / status, live announcer, journal, turn-latency metrics
 - T1 scheduler: src/jarvis/scheduler.py + config/routines.toml — routines fire without a person present, on a dedicated session, guarded (one fire/day, no overlap, budget watchdog, failure auto-disable, DND)
 - Memory: `src/jarvis/memory/` package — `facts.py` (subject-written core),
   `archive.py` (verbatim archival), `recall.py` (deterministic search),
@@ -35,7 +37,14 @@ lives in [`docs/roadmap.md`](docs/roadmap.md)). Run the console:
 - Skills: `src/jarvis/skills.py` — procedural memory (Hermes-adapted):
   SKILL.md book, index injection under `[skills]` budget, deterministic
   name matching, `skill NAME TASK` invocation; skills live in
-  `.jarvis/skills/`, proposals reserved under `_proposals/` (phase 7)
+  `.jarvis/skills/`, kernel-drafted proposals stage under `_proposals/`
+- Learning loop: `src/jarvis/learning.py` + `memory/staging.py` — the
+  kernel drafts skill/memory proposals after compaction or N turns
+  (policy `[learning]`); `skill approve|reject NAME`, `fact
+  approve|reject ID` are the only paths to live state
+- Delegation: `delegate TASK` spawns a child session under a `delegated`
+  trust that cannot delegate further (deny_actions in policy.toml); its
+  output is evidence, never commands
 - [`docs/opencode-api.lock.json`](docs/opencode-api.lock.json) — the locked API surface
 
 ## Current state
@@ -44,7 +53,7 @@ lives in [`docs/roadmap.md`](docs/roadmap.md)). Run the console:
 - Kernel adapter: `src/jarvis/kernel/` package — `adapter.py` (one method per
   locked operation), `http.py` (transport + SSE), `events.py` (EventPipe),
   `config.py`, `errors.py` (stdlib only)
-- Tests: `tests/unit/` (hermetic, 142 green) + `tests/live/` (real kernel) —
+- Tests: `tests/unit/` (hermetic, 162 green) + `tests/live/` (real kernel) —
   `PYTHONPATH=src python3 -m pytest tests/unit -q`
 - Default model `opencode/glm-5.3-flash-free`; switch with `model provider/model-id` or `JARVIS_MODEL` env; auto-failover on rate limits via `config/policy.toml [model] failover` (you write the chain — file is the approval)
 - `serena` MCP: connected **through jarvis-mcp-gate** (discovery & reads flow free; mutating calls gated by one-time code) · `rea` MCP: registered, **disabled** (until Gate B)
@@ -58,10 +67,11 @@ profiles/        profile .md files (personality — NOT workspaces)
 src/jarvis/      the active layer
   gates/         Gate A (intent) · Gate B (tool policy) · permission worker
   kernel/        OpenCode adapter: transport, SSE, EventPipe, operation surface
-  memory/        core facts · verbatim archive · recall · prompt block · compaction
+  memory/        core facts · verbatim archive · recall · prompt block · compaction · staging
   console/       text front-end: app (loop+failover) · commands (surface) · turns
   scheduler.py   routines (config/routines.toml)
   skills.py      procedural memory: SKILL.md book · index · deterministic match
+  learning.py    ritual: kernel-drafted proposals · guards · staging feed
   registry.py    owned-session trust registry
   announcer.py   live narration of codes/results
   mcp_gate.py    gated MCP bridge (jarvis-mcp-gate)

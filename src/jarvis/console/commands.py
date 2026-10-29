@@ -51,6 +51,17 @@ HELP = """commands:
   skill NAME        show a skill's full procedure
   skill NAME TASK   run TASK following that skill (body rides as context;
                     its tools still pass Gate B like any other turn)
+  skill proposals   show staged skill drafts (learning-ritual output)
+  skill approve NAME  install a staged draft (the only path to live skills)
+  skill reject NAME   archive a staged draft (recoverable, never deleted)
+  fact proposals    show staged memory changes (kernel-proposed)
+  fact approve ID   apply a staged memory change (your approval IS the write)
+  fact reject ID    refuse a staged memory change
+  delegate TASK     child session for TASK; output returns as evidence
+                    (never executed) and it cannot delegate further
+  delegatebg TASK   same, background lane (announcer reports completion)
+  delegates         list delegations and their state
+  delegate-read SID print a delegation's captured output (evidence)
   status            kernel, session, model, memory, skills, queue summary
   help              this text
   quit              shut the console down cleanly
@@ -189,9 +200,11 @@ class ConsoleCommands:
         except KernelError as e:
             self.journal.add("compact-failed", session_id=sid, error=e.message)
             return "compaction failed: " + e.message
-        return ("compacted: snapshot of " + str(out["messages_before"])
-                + " messages taken; " + str(out["facts_injected"])
-                + " durable fact(s) re-injected.")
+        out = ("compacted: snapshot of " + str(out["messages_before"])
+               + " messages taken; " + str(out["facts_injected"])
+               + " durable fact(s) re-injected.")
+        ritual = self.learning.note_compaction()
+        return out + ((" " + ritual) if ritual else "")
 
     # ---------------------------------------------------------------- model
 
@@ -219,11 +232,19 @@ class ConsoleCommands:
     # ---------------------------------------------------------------- skills
 
     def _skill_cmd(self, rest):
-        """skill | skill NAME | skill NAME TASK -- the procedural-memory
-        surface. Listing and showing are for the HUMAN; invoking composes
-        the skill's body ahead of the task and launches a normal turn:
-        Gate A classifies it, Gate B still judges every tool it tries,
-        and the suggested lane is honored only if it is fg or bg."""
+        """skill | skill NAME | skill NAME TASK | skill proposals |
+        skill approve|reject NAME. Listing and showing are for the HUMAN;
+        invoking composes the skill's body ahead of the task and launches
+        a normal turn: Gate A classifies it, Gate B still judges every
+        tool it tries, and the suggested lane is honored only if it is
+        fg or bg. Approvals are the only path from staging to live."""
+        parts = rest.split(None, 1)
+        if parts and parts[0] == "proposals":
+            return self._skill_proposals()
+        if parts and parts[0] in ("approve", "reject"):
+            if len(parts) < 2 or not parts[1].strip():
+                return "usage: skill " + parts[0] + " NAME"
+            return self._skill_review(parts[0], parts[1].strip())
         skills = self.skills.list()
         if not rest:
             if not skills:
@@ -252,6 +273,110 @@ class ConsoleCommands:
                          lane=lane, task=task[:280])
         return self.ask(self.skills.body_block(s) + "\n\nTask: " + task,
                         lane=lane, skills=False)
+
+    def _skill_proposals(self):
+        staged = self.skills.proposals()
+        mem = self.staging.list()
+        if not staged and not mem:
+            return ("nothing staged — the learning ritual drafts here "
+                    "after review windows ('skill proposals', 'fact proposals')")
+        lines = [str(len(staged)) + " skill proposal(s), " + str(len(mem))
+                 + " memory proposal(s) waiting:"]
+        for s in staged:
+            lines.append("- [skill] " + s.name + " — " + s.description
+                         + "  ('skill approve " + s.name + "')")
+        for e in mem:
+            lines.append("- [" + e["action"] + "] " + e["id"] + ": "
+                         + e["text"][:160] + "  ('fact approve " + e["id"] + "')")
+        return "\n".join(lines)
+
+    def _skill_review(self, verb, name):
+        try:
+            if verb == "approve":
+                s = self.skills.approve_proposal(name)
+                self.journal.add("skill-proposal", action="approve",
+                                 skill=s.name, outcome="installed")
+                return ("installed '" + s.name + "' — it is now visible to "
+                        "the index and matching (Gate B still gates its tools).")
+            path = self.skills.reject_proposal(name)
+            self.journal.add("skill-proposal", action="reject", skill=name,
+                             outcome="archived", path=path.as_posix())
+            return ("archived '" + name + "' to " + path.as_posix()
+                    + " (recoverable, never deleted).")
+        except ValueError as e:
+            return "refused: " + str(e)
+
+    # ----------------------------------------------------------- fact staging
+
+    def _fact_cmd(self, rest):
+        """fact proposals | fact approve ID | fact reject ID — the human
+        gate on the kernel's staged memory changes. The approval applies
+        through the SAME subject-written path as 'remember' (D6: the
+        kernel never writes facts; it proposes)."""
+        parts = rest.split(None, 1)
+        if not parts or parts[0] == "proposals":
+            return self._memory_proposals()
+        verb, pid = parts[0], (parts[1].strip() if len(parts) > 1 else "")
+        if verb not in ("approve", "reject") or not pid:
+            return "usage: fact proposals | fact approve ID | fact reject ID"
+        entry = self.staging.resolve(pid, verb == "approve")
+        if entry is None:
+            return "no open proposal '" + pid + "'. ('fact proposals' lists them)"
+        if verb == "approve":
+            try:
+                if entry["action"] == "remember":
+                    f = self.facts.add(entry["text"], self._categorize(entry["text"]),
+                                       source="console")
+                    outcome = "remembered (" + f["id"] + ")"
+                else:
+                    n = self.facts.forget(entry["text"])
+                    outcome = ("forgot " + str(n) + " fact(s)" if n
+                               else "matched nothing (already gone)")
+            except ValueError as e:
+                outcome = "refused by the store: " + str(e)
+        else:
+            outcome = "refused — decision recorded"
+        self.journal.add("memory-op", op="proposal-"
+                         + ("approved" if verb == "approve" else "rejected"),
+                         proposal=pid, action=entry["action"],
+                         text=entry["text"][:280], outcome=outcome)
+        return "proposal " + pid + " (" + entry["action"] + "): " + outcome
+
+    def _memory_proposals(self):
+        mem = self.staging.list()
+        if not mem:
+            return "no staged memory changes."
+        return "\n".join("- " + e["id"] + " [" + e["action"] + "] " + e["text"][:160]
+                         + "  ('fact approve " + e["id"] + "')" for e in mem)
+
+    # -------------------------------------------------------------- delegates
+
+    def _delegates(self):
+        started = [e for e in self.journal.tail(200)
+                   if e.get("kind") == "delegate-started"]
+        if not started:
+            return "no delegations yet ('delegate TASK' spawns one)."
+        results = {e.get("child"): e for e in self.journal.tail(200)
+                   if e.get("kind") == "delegate-result"}
+        lines = []
+        for e in reversed(started):
+            sid = str(e.get("child", "?"))
+            r = results.get(sid)
+            status = ("done, " + str(r.get("chars", 0)) + " chars"
+                      if r else "no result yet — 'delegate-read " + sid + "' tries")
+            lines.append("- " + sid + "  " + str(e.get("task", ""))[:80]
+                         + "  [" + status + "]")
+        return "\n".join(lines)
+
+    def _delegate_read(self, sid):
+        sid = (sid or "").strip()
+        if not sid:
+            return "usage: delegate-read SESSION-ID  ('delegates' lists them)"
+        text = self.replay_text(sid, 0)
+        if not text:
+            return ("no captured output for '" + sid + "' (still running, or "
+                    "the console restarted since it ran).")
+        return "-- delegate evidence (read-only; never executed) --\n" + text
 
     def _models_list(self):
         try:

@@ -199,3 +199,106 @@ class SkillBook:
         meta = "suggested lane: " + (skill.lane or "fg") \
             + " | intended tools: " + (", ".join(skill.tools) if skill.tools else "-")
         return head + "\n" + meta + "\n\n" + skill.body
+
+    # ----------------------------------------------------- proposal staging
+    #
+    # Phase 7 (Hermes curator, adapted): the kernel DRAFTS skills into
+    # skills/_proposals/ — invisible to list/match by the `_` rule — and
+    # the subject installs them with an explicit console approval. The
+    # worst outcome is recoverable: `reject` archives to
+    # _proposals/_rejected/, it never deletes.
+
+    def stage_proposal(self, name: str, description: str, body: str,
+                       lane: str | None = None, tools=None) -> Skill:
+        """Write one proposal file into _proposals/. Deterministic and
+        human-readable: the file IS the proposal the human will review."""
+        name = sanitize_name(name)
+        description = " ".join((description or "").split())
+        if not description:
+            raise ValueError("proposal needs a description")
+        pdir = self.root / "_proposals"
+        pdir.mkdir(parents=True, exist_ok=True)
+        target = pdir / (name + ".md")
+        if target.exists():
+            raise ValueError("a proposal named '" + name + "' is already staged")
+        lines = ["---", "name: " + name, "description: " + description]
+        if lane in ("fg", "bg"):
+            lines.append("lane: " + lane)
+        if tools:
+            lines.append("tools: [" + ", ".join(str(t) for t in tools) + "]")
+        lines.append("---")
+        target.write_text("\n".join(lines) + "\n\n" + (body or "").strip() + "\n",
+                          encoding="utf-8")
+        return Skill(name=name, description=description, body=(body or "").strip(),
+                     path=target, lane=lane, tools=list(tools or []))
+
+    def proposals(self) -> list[Skill]:
+        """Staged (unapproved) proposals, parsed like skills but from the
+        staging directory. Undescribable drafts are skipped with reasons —
+        a malformed kernel draft must never crash the review surface."""
+        pdir = self.root / "_proposals"
+        out: list[Skill] = []
+        if not pdir.is_dir():
+            return []
+        for path in sorted(pdir.glob("*.md")):
+            meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            raw_name = meta.get("name")
+            name = (str(raw_name).strip()
+                    if isinstance(raw_name, str) and raw_name.strip() else path.stem)
+            description = str(meta.get("description") or "").strip()
+            if not description:
+                continue
+            raw_tools = meta.get("tools")
+            if isinstance(raw_tools, str):
+                raw_tools = [t.strip() for t in raw_tools.split(",") if t.strip()]
+            out.append(Skill(name=name, description=description, body=body,
+                             path=path, lane=meta.get("lane"),
+                             tools=raw_tools if isinstance(raw_tools, list) else None))
+        return out
+
+    def approve_proposal(self, name: str) -> Skill:
+        """The human said yes: validate, install as <name>.md in the
+        visible set, remove the staged draft. Raises ValueError with a
+        human-readable reason otherwise."""
+        want = sanitize_name(name)
+        staged = {s.name: s for s in self.proposals()}
+        s = staged.get(want)
+        if s is None:
+            raise ValueError("no proposal named '" + want + "' staged")
+        flat = self.root / (want + ".md")
+        if flat.exists():
+            raise ValueError("a skill named '" + want + "' is already installed")
+        flat.write_text(s.path.read_text(encoding="utf-8"), encoding="utf-8")
+        s.path.unlink()
+        return Skill(name=want, description=s.description, body=s.body,
+                     path=flat, lane=s.lane, tools=s.tools)
+
+    def reject_proposal(self, name: str) -> Path:
+        """The human said no: archive the draft under _proposals/_rejected/
+        (recoverable, auditable — never delete). Raises ValueError if the
+        proposal does not exist."""
+        want = sanitize_name(name)
+        staged = {s.name: s for s in self.proposals()}
+        s = staged.get(want)
+        if s is None:
+            raise ValueError("no proposal named '" + want + "' staged")
+        rdir = self.root / "_proposals" / "_rejected"
+        rdir.mkdir(parents=True, exist_ok=True)
+        target = rdir / (want + "-" + str(int(s.path.stat().st_mtime)) + ".md")
+        s.path.rename(target)
+        return target
+
+
+def sanitize_name(name: str) -> str:
+    """Kebab-case a skill name; refuse anything that could escape the
+    skills root or collide with the staging namespaces."""
+    s = "-".join((name or "").strip().lower().split())
+    s = "".join(c if (c.isalnum() or c == "-") else "-" for c in s)
+    while "--" in s:
+        s = s.replace("--", "-")
+    s = s.strip("-")
+    if not s or s.startswith("_") or not all(c.isalnum() or c == "-" for c in s):
+        raise ValueError("bad skill name: '" + str(name) + "'")
+    if len(s) > 48:
+        raise ValueError("skill name too long (max 48)")
+    return s

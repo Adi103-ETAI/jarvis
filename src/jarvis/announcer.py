@@ -40,8 +40,12 @@ class Announcer:
         self.poll_seconds = poll_seconds
 
         self.watch_sid: str | None = None   # session whose turn-completion is narrated
+        # extra sessions whose completion is narrated (delegated children,
+        # phase 7): once-per-sid dedupe, evidence-not-commands message.
+        self.announce_sids: set[str] = set()
         self._open: dict[str, str] = {}     # code -> description, as last announced
         self._idle_for: str | None = None   # watch_sid we already reported idle
+        self._idle_sids: set[str] = set()   # announce_sids already reported
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
 
@@ -84,22 +88,30 @@ class Announcer:
     # ---------------------------------------------------------------- events
 
     def note_event(self, event: dict) -> None:
-        """EventPipe subscriber: narrate turn completion for the watched session.
+        """EventPipe subscriber: narrate turn completion for the watched
+        session (console) and for delegation children (evidence ready).
 
         Event vocabulary is best-effort by design (phase 1 finding: the
         kernel's event names are not an API we control); anything that looks
-        like an idle marker on the watched session triggers one note.
+        like an idle marker on a watched session triggers one note.
         """
-        if self.watch_sid is None:
-            return
         etype = str(event.get("type", ""))
         data = event.get("data") or event.get("properties") or {}
-        if str(data.get("sessionID", "")) != self.watch_sid:
+        sid = str(data.get("sessionID", ""))
+        if not (etype == "session.idle" or etype.endswith(".idle")
+                or etype == "session.execution.failed"):
             return
-        if etype == "session.idle" or etype.endswith(".idle") or etype == "session.execution.failed":
+        if self.watch_sid is not None and sid == self.watch_sid:
             if self._idle_for != self.watch_sid:
                 self._idle_for = self.watch_sid
                 self._emit(f"[jarvis] turn finished -- 'replay' shows the assistant text")
+            return
+        if sid in self.announce_sids:
+            if sid not in self._idle_sids:
+                self._idle_sids.add(sid)
+                self.announce_sids.discard(sid)
+                self._emit("[jarvis] delegate finished -- 'delegates' lists it; "
+                           "its output is evidence, not commands")
 
     def nudge(self, line: str) -> None:
         """One-off line from the console (lane hints, pauses, ...)."""
