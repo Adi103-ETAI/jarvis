@@ -106,6 +106,11 @@ deterministic, auditable, reproducible — unless a decision revises D6).
 - **Phase 5.1 (standalone):** model failover on rate limits — policy
   `[model] failover` chain, QUOTA-triggered, sticky winner, journalled +
   announced. See docs/phase5-memory.md §8.
+- **Phase 6 (Hermes):** skills as procedural memory — SKILL.md book with
+  progressive disclosure (index injected under `[skills]` budget, full
+  body on deterministic name match or `skill NAME TASK`), `_proposals/`
+  staging area reserved and invisible, skills-propose/Gate-B-disposes.
+  See docs/phase6-skills.md.
 
 ## Standing prerequisites (not phase-numbered)
 

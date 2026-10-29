@@ -47,7 +47,11 @@ HELP = """commands:
   compact           compact this session; re-inject durable facts after
   model [P/M]       show or switch the kernel model (also JARVIS_MODEL env)
   models            list models the kernel offers
-  status            kernel, session, model, memory, queue summary
+  skill             list installed skills (procedural memory)
+  skill NAME        show a skill's full procedure
+  skill NAME TASK   run TASK following that skill (body rides as context;
+                    its tools still pass Gate B like any other turn)
+  status            kernel, session, model, memory, skills, queue summary
   help              this text
   quit              shut the console down cleanly
 """
@@ -68,6 +72,8 @@ class ConsoleCommands:
             "routines  : " + str(armed) + "/" + str(len(self.scheduler.routines)) + " armed",
             "memory    : " + str(len(self.facts.facts())) + " facts, "
                           + str(len(self.archive.turns())) + " turns archived",
+            "skills    : " + str(len(self.skills.list())) + " installed"
+                          + " (" + str(self.skills.root) + ")",
             "awaiting  : " + str(len(self.worker.pending_list()) + len(self.store.list()))
             + " confirmation(s)",
         ])
@@ -209,6 +215,43 @@ class ConsoleCommands:
                          session=self.session["id"] if self.session else None)
         return "model set to " + spec["providerID"] + "/" + spec["id"] \
             + " (this session and all future sessions)."
+
+    # ---------------------------------------------------------------- skills
+
+    def _skill_cmd(self, rest):
+        """skill | skill NAME | skill NAME TASK -- the procedural-memory
+        surface. Listing and showing are for the HUMAN; invoking composes
+        the skill's body ahead of the task and launches a normal turn:
+        Gate A classifies it, Gate B still judges every tool it tries,
+        and the suggested lane is honored only if it is fg or bg."""
+        skills = self.skills.list()
+        if not rest:
+            if not skills:
+                return ("no skills installed -- drop SKILL.md files into "
+                        + str(self.skills.root)
+                        + " (format: docs/phase6-skills.md)")
+            lines = [str(len(skills)) + " skill(s) in " + str(self.skills.root) + ":"]
+            for s in skills:
+                tools = ", ".join(s.tools) if s.tools else "-"
+                lines.append("- " + s.name + "  [lane " + (s.lane or "fg")
+                             + "; tools " + tools + "]  " + s.description)
+            return "\n".join(lines)
+        parts = rest.split(None, 1)
+        name, task = parts[0], (parts[1].strip() if len(parts) > 1 else "")
+        s = self.skills.get(name)
+        if s is None:
+            return "no skill named '" + name + "'. ('skill' lists what is installed)"
+        if not task:
+            tools = ", ".join(s.tools) if s.tools else "-"
+            head = (s.name + "  [lane " + (s.lane or "fg") + "; tools " + tools + "]"
+                    + "\n" + s.path.as_posix()
+                    + "\n" + ("-" * 48) + "\n" + s.description)
+            return head + "\n\n" + s.body
+        lane = s.lane if s.lane in ("fg", "bg") else "fg"
+        self.journal.add("skill-invoked", skill=s.name, mode="explicit",
+                         lane=lane, task=task[:280])
+        return self.ask(self.skills.body_block(s) + "\n\nTask: " + task,
+                        lane=lane, skills=False)
 
     def _models_list(self):
         try:

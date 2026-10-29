@@ -61,6 +61,17 @@ max_facts = 512            # hard cap on stored facts (tighten-only storage)
 inject_max_chars = 1200    # per-turn durable-memory prompt prefix budget
 relevant_top_k = 3         # non-core facts recalled into a turn by relevance
 
+# Phase 6 skills — procedural memory (Hermes-adapted). A skill PROPOSES a
+# procedure and names the tools it INTENDS to use; Gate B still judges
+# every call, so a skill can never grant what policy denies. The index
+# (name + description only) rides into each turn under a char budget; the
+# full body loads only on a deterministic name match or an explicit
+# `skill NAME TASK`. Matching is rule-based, never a model call (D6).
+[skills]
+enabled = true
+inject_max_chars = 900     # per-turn skill-index prompt budget
+match_enabled = true       # swap the index for the full body on a name match
+
 # Model failover (phase 5.1): when the kernel refuses a turn because the
 # model is rate-limited (HTTP 429/402) or a model dies mid-turn, JARVIS
 # tries the next model in this list, in order -- and the winner becomes

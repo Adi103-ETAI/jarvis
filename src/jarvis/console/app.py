@@ -41,6 +41,7 @@ from jarvis.pending_store import PendingStore
 from jarvis.policy import Policy
 from jarvis.registry import OwnedKernel, SessionRegistry
 from jarvis.scheduler import Scheduler
+from jarvis.skills import SkillBook
 
 from jarvis.console.commands import ConsoleCommands, HELP, parse_model_spec
 from jarvis.console.turns import (QUOTA_STATUSES, _model_str,
@@ -55,7 +56,8 @@ class JarvisConsole(ConsoleCommands):
 
     def __init__(self, *, workspace=DEFAULT_WORKSPACE, model=None,
                  policy_path=None, journal_path=None, audit_path=None,
-                 pending_root=None, routines_path=None, memory_dir=None):
+                 pending_root=None, routines_path=None, memory_dir=None,
+                 skills_dir=None):
         self.workspace = workspace
         # Model resolution order: explicit arg > JARVIS_MODEL env > pinned default.
         self.model = model or parse_model_spec(os.environ.get("JARVIS_MODEL")) \
@@ -95,6 +97,12 @@ class JarvisConsole(ConsoleCommands):
         self.memory = Recall(self.facts, self.archive)
         self.compactor = Compactor(self.kernel, self.facts, self.archive,
                                    self.journal)
+        # Skills (phase 6): procedural memory next to the memory files, so
+        # one tmp dir still contains a whole hermetic console in tests.
+        # Policy [skills] bounds the index budget and toggles matching; the
+        # book itself only ever reads and proposes (D7).
+        skills_cfg = (getattr(self.policy, "raw_extra", {}) or {}).get("skills") or {}
+        self.skills = SkillBook(skills_dir or (mem_root / "skills"), skills_cfg)
         # ONE event pipe, four subscribers: transcript capture + turn
         # archiving + live announcer + scheduler. Events travel once per
         # subscriber -- attaching via separate pipes would duplicate the
@@ -138,7 +146,8 @@ class JarvisConsole(ConsoleCommands):
 
     # ---------------------------------------------------------- main entry
 
-    def ask(self, text, lane="fg", source="console", session_id=None):
+    def ask(self, text, lane="fg", source="console", session_id=None,
+            skills=True):
         """Input -> Gate A -> kernel turn (Gate B watches the tools).
 
         source       trust provenance: "console" | "scheduled" (routines);
@@ -148,6 +157,10 @@ class JarvisConsole(ConsoleCommands):
         lane="fg"    wait for the turn and return the assistant text (or the
                      pause notice when a human decision is needed mid-turn).
         lane="bg"    fire and forget; the announcer reports completion.
+        skills=True  let the skills book inject its index (or a matched
+                     skill's full body) ahead of the prompt; explicit
+                     `skill NAME TASK` invocations pass False because they
+                     already attached the body themselves.
         """
         verdict, reason = classify(text, source)
         self.journal.add("gate-a", verdict=verdict, reason=reason,
@@ -171,7 +184,9 @@ class JarvisConsole(ConsoleCommands):
         # classified and what the journal records; the prefix is labeled so
         # the kernel treats it as memory, not as fresh instructions.
         mem_block = self._memory_prefix(text) if source in ("console", "scheduled") else ""
-        prompt_text = (mem_block + "\n\n" + text) if mem_block else text
+        sk_block = self._skills_prefix(text) if skills else ""
+        blocks = [b for b in (mem_block, sk_block) if b]
+        prompt_text = ("\n\n".join(blocks) + "\n\n" + text) if blocks else text
         # Model failover (phase 5.1): try the current model, then the policy
         # chain, on rate-limit refusals (dispatch) or mid-turn model death
         # (execution.failed). Bounded by chain length; the winner becomes
@@ -209,7 +224,7 @@ class JarvisConsole(ConsoleCommands):
                     continue
                 return "kernel refused the turn: " + e.message
             self.journal.add("turn-started", session_id=sid, lane=lane, text=text[:280],
-                             memory_chars=len(mem_block))
+                             memory_chars=len(mem_block), skills_chars=len(sk_block))
             if lane == "bg":
                 self._stick_model(chain, attempt, original_model, failover_reason)
                 return "launched in background -- announcer reports when it idles ('replay' reads it)."
@@ -344,6 +359,8 @@ class JarvisConsole(ConsoleCommands):
             return self._model_cmd(line[5:].strip())
         if low == "models":
             return self._models_list()
+        if low == "skill" or low.startswith("skill "):
+            return self._skill_cmd(line[6:].strip() if low.startswith("skill ") else "")
         if low.startswith("bg "):
             return self.ask(line[3:].strip(), lane="bg")
         if low.startswith("yes ") or low == "yes":
@@ -380,6 +397,22 @@ class JarvisConsole(ConsoleCommands):
                                                                kinds=("fact",))
                     if h["id"] in by_id]
         return facts_prompt_block(facts, relevant=relevant, max_chars=max_chars)
+
+    def _skills_prefix(self, text):
+        """Progressive disclosure (Hermes-adapted, phase 6): the index
+        (name + description) rides in every turn under the policy budget;
+        a deterministic name match swaps the index for that skill's FULL
+        body. Context, never authority (D6); matching never a model call
+        (D6); the skill proposes, Gate B disposes (D7)."""
+        cfg = self.skills.cfg
+        if not cfg.get("enabled", True):
+            return ""
+        if cfg.get("match_enabled", True):
+            hit = self.skills.match(text)
+            if hit is not None:
+                self.journal.add("skill-matched", skill=hit.name, mode="text-match")
+                return self.skills.body_block(hit)
+        return self.skills.index_block(int(cfg.get("inject_max_chars", 900)))
 
     # ---------------------------------------------------------------- exit
 
