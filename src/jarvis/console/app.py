@@ -29,6 +29,7 @@ import time
 
 from jarvis.announcer import Announcer
 from jarvis.audit import GateLog
+from jarvis.channels import ChannelGateway, PairingStore, load_channel_configs
 from jarvis.confirm import ConfirmationBroker
 from jarvis.gates.intent import classify
 from jarvis.gates.tool import ToolGate
@@ -135,24 +136,110 @@ class JarvisConsole(ConsoleCommands):
             emit=self.announcer.nudge)
         self.archiver = TurnArchiver(self.events, self.journal, self.archive,
                                      self.registry.owns)
+        # Messaging gateway (phase 8, OpenClaw-adapted): a delivery RIM
+        # around this console, never a second spine. Channels come from
+        # policy [channels.*] and are OFF until the human writes them on;
+        # admission is policy mechanics here, trust stays with Gate A/B.
+        self.gateway = None
+        ch_cfgs = load_channel_configs(
+            getattr(self.policy, "raw_extra", {}) or {}, journal=self.journal)
+        if ch_cfgs:
+            self.gateway = ChannelGateway(
+                ch_cfgs,
+                on_message=self._channel_message,
+                journal=self.journal,
+                notify=self.announcer.nudge,
+                pairing_store=PairingStore(mem_root / "pairing.jsonl",
+                                           journal=self.journal),
+                collect_text=self.replay_text)
+            self.gateway.adopt_from_journal(self.journal.tail(2000))
         pipe = self.kernel.events_nonblocking()
         pipe.attach(self.events.append)
         pipe.attach(self.archiver.note_event)
         pipe.attach(self.announcer.note_event)
         pipe.attach(self.scheduler.note_event)
         pipe.attach(self.learning.note_event)
+        if self.gateway is not None:
+            pipe.attach(self.gateway.note_event)
         self.announcer.start()
         self.scheduler.start()
+        if self.gateway is not None:
+            self.gateway.start()
         self._turn_start = 0      # events index where the current turn begins
         self._print_lock = threading.Lock()
 
     # --------------------------------------------------------------- output
 
     def _emit(self, line):
-        """Thread-safe line push from the announcer; redraw the prompt."""
+        """Thread-safe line push from the announcer; redraw the prompt.
+        The phase-8 relay (if policy enables it) also feeds announcer
+        lines to the subject's channel -- read-only, filtered, best
+        effort; a relay failure must never break emission."""
         with self._print_lock:
             print("\n" + line, flush=True)
             print("j> ", end="", flush=True)
+        if self.gateway is not None and line:
+            try:
+                self.gateway.relay_console_line(line)
+            except Exception:  # noqa: BLE001 -- relay is a mouth, not a brain
+                pass
+
+    # -------------------------------------------------------------- channels
+
+    def _channel_message(self, cfg, kind, peer_id, msg, admission):
+        """Gateway rim -> spine. Called for every ADMITTED channel message.
+
+        Records it (channel-message), then acts on the lane policy:
+        DMs on the answer lane get one bg turn on the peer's dm session
+        under trust "peer" (which policy.toml denies every mutation --
+        an answer is conversation, never execution). Everything else is
+        recorded only: groups are record-only in v0 by design.
+        """
+        text = str(msg.get("text", ""))
+        self.journal.add("channel-message", channel=cfg.name, flow=kind,
+                         peer=peer_id, sender=str(msg.get("sender_name", ""))[:80],
+                         admission=admission, text=text[:280])
+        if kind != "dm" or cfg.lane != "peer":
+            return "(recorded)"
+        sid = self._ensure_dm_session(cfg, peer_id)
+        if sid is None:
+            return "(kernel unreachable -- cannot open the dm session)"
+        self.gateway.watch_relay(sid, cfg.name, peer_id, len(self.events))
+        out = self.ask(text, lane="bg", source="peer", session_id=sid,
+                       skills=False, gate_lane="answer")
+        if isinstance(out, str) and out.startswith("kernel refused"):
+            # Stale dm session (kernel restart) or a refused prompt: drop
+            # the mapping so the NEXT message recreates it cleanly.
+            self.gateway.forget_dm(cfg.name, peer_id)
+        return out
+
+    def _ensure_dm_session(self, cfg, peer_id):
+        """One kernel session per channel peer, titled dm:<channel>:<peer>.
+        Registry-owned like every session, so the subject rule holds: a
+        channel peer can never reach a session JARVIS did not open."""
+        title = f"dm:{cfg.name}:{peer_id}"
+        sid = self.gateway.dm_session(cfg.name, peer_id)
+        if sid is not None:
+            if not self.registry.owns(sid):
+                self.registry.add(sid, title=title, channel=cfg.name,
+                                  peer=peer_id, trusted=True)
+                self.journal.add("dm-session-adopted", session_id=sid,
+                                 channel=cfg.name, peer=peer_id)
+            return sid
+        try:
+            created = self.kernel.create_session(
+                directory=self.workspace, model=self.model, title=title)
+        except KernelError as e:
+            self.journal.add("channel-answer-failed", channel=cfg.name,
+                             peer=peer_id, error=e.message)
+            return None
+        sid = created["id"]
+        self.registry.add(sid, title=title, channel=cfg.name, peer=peer_id,
+                          trusted=True)
+        self.gateway.remember_dm(cfg.name, peer_id, sid)
+        self.journal.add("dm-session-opened", session_id=sid,
+                         channel=cfg.name, peer=peer_id)
+        return sid
 
     # ------------------------------------------------------------- session
 
@@ -169,11 +256,16 @@ class JarvisConsole(ConsoleCommands):
     # ---------------------------------------------------------- main entry
 
     def ask(self, text, lane="fg", source="console", session_id=None,
-            skills=True, count_for_learning=True):
+            skills=True, count_for_learning=True, gate_lane=None):
         """Input -> Gate A -> kernel turn (Gate B watches the tools).
 
-        source       trust provenance: "console" | "scheduled" (routines);
-                     Gate A classifies by source, Gate B judges by it.
+        source       trust provenance: "console" | "scheduled" (routines)
+                     | "peer" (channel gateway); Gate A classifies by
+                     source, Gate B judges by it.
+        gate_lane    optional Gate A axis for channels (phase 8): the
+                     peer answer lane turns an admitted DM into an
+                     auditable "act" -- the turn itself still runs under
+                     trust "peer", whose policy denies every mutation.
         session_id   run on a specific JARVIS-owned session (the scheduler's
                      dedicated routine session) instead of the console one.
         lane="fg"    wait for the turn and return the assistant text (or the
@@ -184,7 +276,7 @@ class JarvisConsole(ConsoleCommands):
                      `skill NAME TASK` invocations pass False because they
                      already attached the body themselves.
         """
-        verdict, reason = classify(text, source)
+        verdict, reason = classify(text, source, lane=gate_lane)
         self.journal.add("gate-a", verdict=verdict, reason=reason,
                          text=text[:280], source=source)
         if verdict != "act":
@@ -422,6 +514,10 @@ class JarvisConsole(ConsoleCommands):
             return "__quit__"
         if low in ("help", "?"):
             return HELP
+        if low == "channels":
+            return self._channel_cmd("")
+        if low.startswith("channel "):
+            return self._channel_cmd(line[8:].strip())
         if low == "status":
             return self._status()
         if low == "pending":
@@ -533,6 +629,8 @@ class JarvisConsole(ConsoleCommands):
     # ---------------------------------------------------------------- exit
 
     def close(self):
+        if self.gateway is not None:
+            self.gateway.stop()
         self.scheduler.stop()
         self.announcer.stop()
         self.worker.stop()

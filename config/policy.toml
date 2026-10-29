@@ -46,7 +46,14 @@ mutating = "confirm"      # typed by you: ask before mutating (with a one-time c
 mutating = "deny"         # overheard/fallback-parsed speech: may NEVER mutate
 
 [trust.peer]
-mutating = "confirm"      # later: routed through bus escalation to a human
+# Phase 8: channel peers (Telegram DMs, groups) talk to JARVIS through
+# the gateway. Peer ANSWER turns are TEXT-ONLY conversation: mutating =
+# "deny" and task-spawning denied below, so a chat message can never
+# execute anything — OpenClaw's chat-driven tool execution is refused on
+# principle (D7). Widening this (e.g. mutating = "confirm") is a
+# deliberate subject edit of THIS FILE; code never widens it at runtime.
+mutating = "deny"
+deny_actions = ["task"]   # a peer conversation may never spawn delegates
 
 [trust.scheduled]
 mutating = "confirm"      # standing jobs still confirm; once you trust the loop, flip specific jobs
@@ -104,6 +111,29 @@ failover = [
   # "opencode/qwen3-coder-free",
   # "opencode/gpt-5-nano",
 ]
+
+# Phase 8 — messaging gateway (OpenClaw-adapted, docs/phase8-gateway.md).
+# A channel is a trust SOURCE, never an authority: policy maps it to a
+# lane, and every invalid/missing value falls back to the SAFE choice
+# (lane->observe, dm->disabled, groups->disabled, relay->off). Channels
+# are OFF until you edit this file — the file IS the approval (same law
+# as routines.toml and the failover chain). Pairing decisions happen at
+# the console ONLY (channel approve); a paired sender gains a
+# conversation, never a permission.
+[channels.telegram]
+enabled = false            # flip to true + fill token to go live
+lane = "peer"              # peer = observe/brief/answer (text-only) | observe = record-only
+dm_policy = "pairing"      # pairing | allowlist | disabled (unknown senders get a code)
+allow_from = []            # numeric Telegram user ids approved HERE, e.g. ["123456789"]
+group_policy = "disabled"  # groups are record-only in v0; "allowlist" + ids to record
+group_allow_from = []      # numeric chat ids (supergroups are negative)
+require_mention = true     # groups: only mentioned messages are recorded
+mention_patterns = ['\bjarvis\b']
+pairing_ttl_seconds = 3600 # pairing codes expire after 1 hour (OpenClaw's rule)
+max_pending_pairings = 3   # ignore extra requests while 3 await review
+relay = "off"              # off | subject — code notices + routine lines to your DM
+subject = ""               # YOUR numeric id (relay target); the relay is read-only
+# token = ""               # or JARVIS_TELEGRAM_TOKEN env, or token_file = "/path"
 
 # MCP bridge (jarvis-mcp-gate): MCP tools raise no kernel permission
 # requests in 2.1.4, so the bridge carries the gate itself -- with the SAME

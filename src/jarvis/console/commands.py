@@ -62,6 +62,12 @@ HELP = """commands:
   delegatebg TASK   same, background lane (announcer reports completion)
   delegates         list delegations and their state
   delegate-read SID print a delegation's captured output (evidence)
+  channels          configured messaging channels and their state
+  channel pairings [NAME]      pending DM pairing requests
+  channel approve CHANNEL CODE admit a paired sender (console-only authority)
+  channel reject CHANNEL CODE  drop a pairing request
+  channel forget CHANNEL SENDER revoke a paired sender (runtime tighten)
+  channel say CHANNEL CHAT TEXT push one message out (audited)
   status            kernel, session, model, memory, skills, queue summary
   help              this text
   quit              shut the console down cleanly
@@ -350,6 +356,102 @@ class ConsoleCommands:
                          + "  ('fact approve " + e["id"] + "')" for e in mem)
 
     # -------------------------------------------------------------- delegates
+
+    # -------------------------------------------------------------- channels
+
+    def _channel_cmd(self, rest):
+        """channel pairings|approve|reject|forget|say (phase 8). Pairing
+        decisions live HERE — at the console — because the console is the
+        only mutating surface (D7). The gateway can only ask."""
+        if self.gateway is None:
+            return "no channels configured (add a [channels.<name>] stanza to policy.toml)."
+        parts = rest.split(None, 1)
+        verb = parts[0] if parts else ""
+        args = parts[1].strip() if len(parts) > 1 else ""
+        if verb == "pairings":
+            return self._channel_pairings(args)
+        if verb in ("approve", "reject"):
+            p = args.split(None, 1)
+            if len(p) < 2 or not p[1].strip():
+                return "usage: channel " + verb + " CHANNEL CODE"
+            return self._channel_pair(verb, p[0].strip(), p[1].strip())
+        if verb == "forget":
+            p = args.split(None, 1)
+            if len(p) < 2 or not p[1].strip():
+                return "usage: channel forget CHANNEL SENDER_ID"
+            return self._channel_forget(p[0].strip(), p[1].strip())
+        if verb == "say":
+            p = args.split(None, 2)
+            if len(p) < 3 or not p[2].strip():
+                return "usage: channel say CHANNEL CHAT_ID TEXT"
+            return self._channel_say(p[0].strip(), p[1].strip(), p[2].strip())
+        return self.gateway.describe()
+
+    def _channel_pairings(self, name):
+        gw = self.gateway
+        if gw.pairings is None:
+            return "pairing is not active (no store)."
+        chan = name.strip() or None
+        pend = gw.pairings.pending(chan)
+        lines = []
+        for cfg in gw.cfgs.values():
+            if chan is not None and cfg.name != chan:
+                continue
+            lines.append(gw.status_line(cfg))
+        if not pend:
+            lines.append("no pending pairing requests."
+                         + ("" if chan else " ('channel pairings NAME' filters)"))
+        else:
+            lines.append("pending pairing request(s) — approve at this console only:")
+            lines += ["- " + e["channel"] + "  " + e["code"] + "  "
+                      + str(e.get("name", "")) + " (peer " + str(e.get("peer"))
+                      + ", " + str(e.get("age_s", "?")) + "s ago)" for e in pend]
+            lines.append("usage: channel approve CHANNEL CODE / channel reject CHANNEL CODE")
+        return "\n".join(lines)
+
+    def _channel_pair(self, verb, channel, code):
+        gw = self.gateway
+        if gw.pairings is None:
+            return "pairing is not active (no store)."
+        if channel not in gw.cfgs:
+            return "no channel named '" + channel + "'. ('channels' lists them)"
+        ttl = gw.cfgs[channel].pairing_ttl_seconds
+        entry = (gw.pairings.approve(channel, code, ttl_seconds=ttl) if verb == "approve"
+                 else gw.pairings.reject(channel, code, ttl_seconds=ttl))
+        if entry is None:
+            return "no pending pairing '" + code + "' on '" + channel + "'."
+        if verb == "approve":
+            self.journal.add("channel-pairing", action="approved",
+                             channel=channel, peer=entry.get("peer"), code=code)
+            gw.send(channel, str(entry.get("peer")),
+                    "Paired -- you can talk to JARVIS now.")
+            return ("approved " + str(entry.get("name", "")) + " (peer "
+                    + str(entry.get("peer")) + ") on " + channel
+                    + "; notified on-channel.")
+        self.journal.add("channel-pairing", action="rejected",
+                         channel=channel, peer=entry.get("peer"), code=code)
+        return ("rejected the request from " + str(entry.get("name", ""))
+                + " (silent; nothing was sent).")
+
+    def _channel_forget(self, channel, peer):
+        if self.gateway is None or self.gateway.pairings is None:
+            return "pairing is not active (no store)."
+        if not self.gateway.pairings.forget(channel, peer):
+            return "no paired sender '" + peer + "' on '" + channel + "'."
+        self.journal.add("channel-pairing", action="forgotten",
+                         channel=channel, peer=peer)
+        return "revoked " + peer + " on " + channel + " (runtime tighten)."
+
+    def _channel_say(self, channel, chat_id, text):
+        if self.gateway is None:
+            return "no channels configured."
+        if channel not in self.gateway.cfgs:
+            return "no channel named '" + channel + "'. ('channels' lists them)"
+        ok = self.gateway.send(channel, chat_id, text)
+        self.journal.add("channel-say", channel=channel, chat=chat_id,
+                         chars=len(text), sent=ok)
+        return ("sent." if ok
+                else "send failed (see journal: channel-send-failed).")
 
     def _delegates(self):
         started = [e for e in self.journal.tail(200)

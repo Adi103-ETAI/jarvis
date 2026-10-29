@@ -22,7 +22,8 @@ IMPERATIVE_MARKERS = (
 CHATTER_MARKERS = ("hmm", "nevermind", "never mind", "okay bye", "goodnight", "thanks")
 
 
-def classify(text: str, source: str = "console") -> tuple[str, str]:
+def classify(text: str, source: str = "console",
+             lane: str | None = None) -> tuple[str, str]:
     t = (text or "").strip()
     if not t:
         return "ignore", "empty input"
@@ -41,6 +42,12 @@ def classify(text: str, source: str = "console") -> tuple[str, str]:
         # A peer's message is never authority (autumn-bus law, ours too).
         if any(m in low for m in CHATTER_MARKERS) and len(t) < 12:
             return "ignore", "peer chatter"
+        if lane == "answer":
+            # Phase 8 channels: the policy-mapped answer lane launches a
+            # TEXT-ONLY turn on the peer's dm session. trust 'peer' in
+            # policy.toml denies every mutation and task-spawning, so
+            # this verdict admits a conversation, never an execution.
+            return "act", "channel answer lane (policy pre-approved; trust 'peer' denies mutation)"
         return "journal", "peer message recorded for review, never acted on"
 
     if source == "ambient":

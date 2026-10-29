@@ -112,3 +112,32 @@ Laws each borrowing must keep, restated per source:
 
 Refused on principle: Hermes' model-in-the-loop routing, OpenClaw's
 chat-driven tool execution, Letta's vector recall.
+
+## D8 — Channels v0: peers get text-only answers, the relay is read-only (2026-10-29)
+
+Phase 8 (OpenClaw-adapted) forced one stance the roadmap left open: when
+a channel lane is "peer" and an admitted DM asks something, what exactly
+may the answer turn DO? The v0 answer, now law:
+
+- **An answer is a conversation, never an execution.** Peer answer
+  turns run under trust "peer", which policy.toml hardens to
+  mutating = "deny" + deny_actions = ["task"]. No tool call, no
+  delegation — Gate B rejects before the kernel asks. OpenClaw's
+  chat-driven tool execution stays refused; widening trust.peer is a
+  deliberate subject edit of the policy FILE, never a code path.
+- **Peers get no durable memory and no skill injection.** A peer's
+  prompt carries the message and a fixed frame only — memory/skills
+  widen what the model knows about the subject, and a channel is the
+  most injection-prone surface JARVIS has. Identity injection remains a
+  Phase 9 concern with its own guard.
+- **Groups record, DMs answer.** Groups (strangers' text, injection
+  surface) are record-only in v0 with OpenClaw's mention gating;
+  widening them to answers is a future deliberate edit.
+- **The relay is a mouth, not a brain.** Confirmation codes may reach
+  the subject's DM (policy relay = "subject"), but they resolve at the
+  console only. Replying to the bot is a peer message: recorded, never
+  executed.
+- **Pairing approvals are console-only.** The gateway can REQUEST a
+  pairing; only `channel approve` at the console grants it, recorded in
+  pairing.jsonl forever. A paired sender gains a conversation, never a
+  permission.

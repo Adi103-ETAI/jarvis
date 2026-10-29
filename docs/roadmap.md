@@ -60,29 +60,30 @@ Refused: autonomous self-modification without a human gate.
 
 ## Phase 8 — messaging gateway & multichannel presence (from OpenClaw)
 
-OpenClaw pattern: one gateway per host, loopback-bound; channels
-(Telegram / WhatsApp / Slack / Discord) connect through it; sessions ARE
-security boundaries (`main` vs `dm:<channel>:<id>`); pairing + allowFrom
-access control; requireMention in groups.
+Shipped 2026-10-29 — see docs/phase8-gateway.md for the build and the
+OpenClaw study behind it. Summary:
 
-What lands in JARVIS:
+- **jarvisd IS the gateway.** `src/jarvis/channels/` adds the delivery
+  rim: policy loader with safe fallbacks, pairing store (JSONL, console-
+  approved only), admission pipeline (dm pairing/allowlist, group
+  allowlist + requireMention + mention patterns), one poller thread per
+  enabled channel. First adapter: Telegram, stdlib Bot API over HTTPS,
+  long polling, injectable transport (hermetically tested).
+- **A channel is a trust SOURCE, never an authority (D5/D7).** The
+  stanza lives in policy.toml (`[channels.telegram]`), OFF by default;
+  invalid values fall back to the safe choice. trust.peer hardened to
+  mutating="deny" + deny task: peer answer turns are TEXT-ONLY
+  conversation on `dm:telegram:<peer_id>` sessions (registry-owned,
+  subject rule unchanged). Groups are record-only in v0.
+- **Relay is read-only.** With `relay = "subject"`, confirmation-code
+  notices and routine lines also reach the subject's DM with a standing
+  "resolve at the console" hint; resolution/expiry lines follow on the
+  same channel. Replying to the bot is a peer message — recorded, never
+  executed.
 
-- jarvisd IS the gateway skeleton (daemon + EventPipe already exist).
-  Channel adapters plug into it; a Telegram adapter is achievable with
-  stdlib only (Bot API over HTTPS, no SDK dependency).
-- A channel is a trust SOURCE, never an authority (D5). policy.toml maps
-  every channel to a lane; the default is peer — observe, brief, answer,
-  never mutate. OpenClaw's allowFrom/pairing becomes a policy stanza,
-  not a code path.
-- Session naming borrowed directly: `dm:telegram:<id>` slots into
-  `registry.owns()` and the subject rule unchanged.
-- Replies route back through the Announcer with channel targeting;
-  confirmations, if ever elevated by a deliberate policy edit, go out
-  and expire on the same channel.
-
-Refused: OpenClaw's chat-driven tool execution. Peer messages are
-recorded, never executed; the console stays the only mutating surface
-unless the subject deliberately edits policy.
+Refused (confirmed in build): chat-driven tool execution, dmPolicy
+"open", group answer turns (deferred), webhooks, chat-side code
+resolution.
 
 ## Phase 9 — identity block + sleep-time compute (from Letta)
 
@@ -119,6 +120,10 @@ deterministic, auditable, reproducible — unless a decision revises D6).
   staged-memory approval (`fact approve|reject`), delegation
   (`delegate TASK`, `delegated` trust with deny_actions, evidence-not-
   commands). See docs/phase7-learning.md.
+- **Phase 8 (OpenClaw):** messaging gateway + Telegram channel —
+  pairing codes approved at the console, allowFrom as a policy stanza,
+  mention-gated group recording, `dm:<channel>:<peer>` sessions,
+  read-only subject relay. See docs/phase8-gateway.md.
 
 ## Standing prerequisites (not phase-numbered)
 
