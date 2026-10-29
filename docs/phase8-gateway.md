@@ -147,7 +147,7 @@ the bot is a peer message — recorded, never executed.
 | `dmPolicy: "open"`                                | Refused. pairing/allowlist/disabled only        |
 | Model/personality-per-channel, multi-agent routing| Refused for now — one brain, lanes are policy   |
 | Group answer turns                                | Deferred. Groups record-only in v0 (widening is a deliberate future edit, not a default) |
-| Webhook transport                                 | Deferred. Long polling only (no public listener to harden) |
+| Webhook transport (Telegram)                      | Deferred. Long polling only (no public listener to harden). WhatsApp adopts the official Cloud API webhook below — one listener, signature-checked |
 | Media, streaming drafts, typing indicators        | Deferred. Text in, chunked text out (Telegram 4096 limit) |
 | Approvals resolved from chat                      | Refused. Codes relay to the subject read-only; the console resolves |
 
@@ -175,6 +175,44 @@ source), `channel-drop` (with reason), `channel-pairing`
 `channel-relay` (answer delivered), `channel-relay-failed`,
 `channel-say`, `channel-send-failed`.
 
+## Second channel: WhatsApp — the official Cloud API (phase 8.1)
+
+OpenClaw's WhatsApp support rides Baileys — a Node library that
+reverse-engineers the WhatsApp Web protocol. That path is refused
+(D9): it sits outside WhatsApp's terms (the linked number risks a
+ban), breaks with any protocol push, and cannot live in a stdlib rim.
+JARVIS speaks the official **WhatsApp Business Cloud API** instead:
+one HTTPS POST (Graph API) to send, one webhook to receive.
+
+- `src/jarvis/channels/whatsapp.py` — `WhatsAppCloudAdapter`:
+  `normalize_webhook` (Meta payload → the same normalized message
+  shape Telegram emits; text only; statuses/media dropped; groups
+  recognized by group id / `@g.us`), `send_message` (Graph API
+  `/messages`, chunked at 4000), `run_loop` (a `ThreadingHTTPServer`
+  webhook receiver until stop: GET = `hub.challenge` verify handshake,
+  POST = `X-Hub-Signature-256` check when `app_secret` is set, then
+  normalize → dedupe by message id → on_message one at a time behind a
+  lock — the spine keeps its single-threaded discipline).
+- Zero WhatsApp-specific trust code: unknown senders get the same
+  pairing code, `channel approve` at the console, peer lane = text-only
+  answers, groups record-only, relay = read-only mouth. The verify
+  token and signature check are AUTHENTICATION (the wire, not the
+  law) — a forged message that passed them still faces the admission
+  pipeline like every other channel.
+- Config: `[channels.whatsapp]` stanza; channel-specific keys
+  (`phone_number_id`, `app_secret`, `webhook_port`, `webhook_path`,
+  `webhook_verify_token`, `api_version`) ride in `cfg.options` and the
+  adapter applies safe fallbacks — a typo cannot widen trust.
+- Going live: Meta app with the WhatsApp product → copy
+  `phone_number_id` → permanent access token (`JARVIS_WHATSAPP_TOKEN`)
+  → expose the webhook publicly (ngrok/cloudflared tunnel is fine for
+  dev) → subscribe Meta to the callback URL with the verify token →
+  set `app_secret` so signatures are enforced (startup notes journal
+  the dev-mode warning until you do).
+- Honest v0 limits: text only (media/template/interactive dropped),
+  quoted-reply context unparsed, group sends best-effort, webhook
+  requires a public HTTPS endpoint.
+
 ## Acceptance (unit, all hermetic)
 
 - Adapter normalizes updates, advances the long-poll offset, chunks
@@ -191,3 +229,8 @@ source), `channel-drop` (with reason), `channel-pairing`
   routes back out; observe launches nothing.
 - Relay filter: code notices and routine lines reach the subject,
   chatter does not.
+- WhatsApp: webhook normalize (dm/group/status/media), signature
+  check, verify handshake, redelivery dedupe, Graph error surfacing,
+  options passthrough with safe fallbacks, factory branch, and the
+  end-to-end law — an unknown WhatsApp sender gets a pairing code,
+  never a turn. (21 new tests, 214 total.)

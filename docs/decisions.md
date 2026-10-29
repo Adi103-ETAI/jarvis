@@ -141,3 +141,50 @@ may the answer turn DO? The v0 answer, now law:
   pairing; only `channel approve` at the console grants it, recorded in
   pairing.jsonl forever. A paired sender gains a conversation, never a
   permission.
+
+## D9 — Adapt designs, not codebases; WhatsApp speaks the official Cloud API (2026-10-29)
+
+The question, asked right after Phase 8 shipped with one channel:
+"why only one channel — what about WhatsApp? And instead of adapting,
+can't we take OpenClaw's and Hermes' code and treat it as the base?"
+
+Both halves get the same answer, recorded as law.
+
+**Taking the code as base is refused.** OpenClaw is a Node/TypeScript
+runtime with a large npm tree; Hermes likewise lives in its own stack.
+JARVIS's active layer is deliberately stdlib Python — deterministic,
+auditable end to end, hermetically tested (214 unit tests, no sockets
+by default). Wholesale adoption means one of two losses: either we
+abandon the kernel/gates/journal spine we can actually read, or we
+embed a foreign runtime whose hundreds of transitive dependencies we
+cannot audit — the opposite of the security posture that is JARVIS's
+whole point. Worse, OpenClaw's channel code carries a different trust
+model (channels that may drive tools directly); adopting it means
+ripping out its authorization assumptions, and whatever residue we
+miss becomes invisible code making admission decisions. D5 stands:
+we copy shapes, rules and UX — the pairing-code alphabet, the 1-hour
+TTL, the 3-pending cap, the normalized message envelope — each
+re-expressed in a few hundred lines readable in one sitting. The cost
+is writing adapters ourselves; the payoff is that every admission
+branch in JARVIS is code we wrote, on purpose, under test.
+
+**WhatsApp via Baileys is refused; via the Cloud API it ships
+(phase 8.1).** OpenClaw's WhatsApp integration rides Baileys — a Node
+library that reverse-engineers the WhatsApp Web multi-device protocol.
+Three strikes: it is outside WhatsApp's terms (the linked number risks
+a ban), it breaks with any protocol push Meta makes, and it cannot run
+inside a stdlib-only rim. JARVIS speaks the official WhatsApp Business
+Cloud API instead — one HTTPS POST (Graph API) to send, one webhook to
+receive — which fits the adapter contract Telegram set exactly.
+Admission, pairing, lanes and relay come free from the gateway; no
+WhatsApp-specific trust code exists anywhere. Honest v0 limits: text
+only, quoted context unparsed, group sends best-effort, and the
+webhook needs a public HTTPS endpoint (a tunnel is fine for dev);
+signature enforcement waits on `app_secret` and the startup journal
+says so loudly until it is set.
+
+Escape hatch, deferred on purpose: if a personal-number WhatsApp-Web
+link is ever genuinely required, the honest form is a Baileys sidecar
+treated as untrusted dumb transport — adapter contract only, zero
+JARVIS logic, policy-gated like any channel. That is a deliberate
+future edit, never a default.

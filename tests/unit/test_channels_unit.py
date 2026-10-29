@@ -605,3 +605,291 @@ def test_http_transport_against_real_http_server(monkeypatch):
         assert seen["payload"] == {"chat_id": "555", "text": "hello over real http"}
     finally:
         server.shutdown()
+
+
+# ------------------------------------------------- whatsapp adapter (8.1)
+
+import hashlib
+import hmac as hmac_mod
+import json as _json
+import urllib.error
+import urllib.request
+from http.server import HTTPServer
+
+from jarvis.channels.whatsapp import (WEBHOOK_PATH, WhatsAppCloudAdapter,
+                                      normalize_webhook, signature_ok)
+
+
+def _wa_payload(messages, statuses=None, group_id=None):
+    value = {"messaging_product": "whatsapp",
+             "metadata": {"display_phone_number": "15550001111",
+                          "phone_number_id": "PNID123"},
+             "contacts": [{"profile": {"name": "Adi"}, "wa_id": "911234567890"}],
+             "messages": messages}
+    if group_id:
+        value["group_id"] = group_id
+    if statuses:
+        value["statuses"] = statuses
+    return {"object": "whatsapp_business_account",
+            "entry": [{"id": "WABA1",
+                       "changes": [{"field": "messages", "value": value}]}]}
+
+
+def _wa_text(body="hello jarvis", sender="911234567890", mid="wamid.ABC"):
+    return {"from": sender, "id": mid, "timestamp": "1699999999",
+            "text": {"body": body}, "type": "text"}
+
+
+class TestWhatsAppNormalize:
+    def test_text_dm_becomes_private_with_sender_name(self):
+        out = normalize_webhook(_wa_payload([_wa_text()]))
+        assert len(out) == 1
+        m = out[0]
+        assert m["chat_id"] == "911234567890"
+        assert m["chat_type"] == "private"
+        assert m["sender_id"] == "911234567890"
+        assert m["sender_name"] == "Adi"
+        assert m["text"] == "hello jarvis"
+        assert m["date"] == 1699999999
+        assert m["message_id"] == "wamid.ABC"
+        assert set(m) >= {"update_id", "reply_to_sender_id"}  # same shape as telegram
+
+    def test_statuses_and_media_are_dropped(self):
+        # no text message at all: one image + delivery statuses -> nothing
+        payload = _wa_payload([{"from": "911234567890", "id": "wamid.IMG",
+                                "type": "image", "image": {"id": "x"}}],
+                              statuses=[{"id": "wamid.IMG",
+                                         "status": "delivered"}])
+        assert normalize_webhook(payload) == []
+
+    def test_group_message_rides_the_group_jid(self):
+        out = normalize_webhook(_wa_payload([_wa_text(sender="91999998888")],
+                                           group_id="123-456@g.us"))
+        assert out[0]["chat_id"] == "123-456@g.us"
+        assert out[0]["chat_type"] == "group"
+        assert out[0]["sender_id"] == "91999998888"
+
+    def test_garbage_payload_yields_nothing(self):
+        assert normalize_webhook({}) == []
+        assert normalize_webhook({"entry": []}) == []
+        assert normalize_webhook({"entry": [{"changes": [{}]}]}) == []
+
+
+class TestWhatsAppSignature:
+    def test_valid_and_invalid(self):
+        secret, raw = "shhh", b'{"hello": 1}'
+        good = "sha256=" + hmac_mod.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+        assert signature_ok(secret, raw, good) is True
+        assert signature_ok(secret, raw, "sha256=" + "0" * 64) is False
+        assert signature_ok(secret, raw, None) is False
+        assert signature_ok(secret, raw, "md5=abcd") is False
+
+    def test_no_secret_accepts_and_notes_dev_mode(self):
+        ad = WhatsAppCloudAdapter("tok", "PNID", transport=lambda *a: {})
+        notes = "\n".join(ad.startup_notes())
+        assert "NOT verified" in notes and "dev mode" in notes
+        ad2 = WhatsAppCloudAdapter("tok", "PNID", app_secret="s",
+                                   transport=lambda *a: {})
+        assert "enforcement ON" in "\n".join(ad2.startup_notes())
+
+
+class TestWhatsAppSend:
+    def test_chunks_and_payload_shape(self):
+        t = FakeTransport()
+        ad = WhatsAppCloudAdapter("tok", "PNID", transport=t)
+        body = "word " * 1200                       # 6000 chars -> 2 chunks
+        assert ad.send_message("911234567890", body) == 2
+        assert len(t.calls) == 2
+        method, payload = t.calls[0]
+        assert method == "messages"
+        assert payload["messaging_product"] == "whatsapp"
+        assert payload["recipient_type"] == "individual"
+        assert payload["to"] == "911234567890"
+        assert payload["text"]["preview_url"] is False
+        assert payload["text"]["body"]
+        assert len(payload["text"]["body"]) <= 4000
+
+    def test_group_send_omits_recipient_type(self):
+        t = FakeTransport()
+        ad = WhatsAppCloudAdapter("tok", "PNID", transport=t)
+        ad.send_message("123-456@g.us", "group note")
+        _, payload = t.calls[0]
+        assert "recipient_type" not in payload
+        assert payload["to"] == "123-456@g.us"
+
+    def test_graph_error_envelope_raises_adapter_error(self):
+        t = FakeTransport({"messages": {"error": {"message": "bad token",
+                                                  "code": 190}}})
+        ad = WhatsAppCloudAdapter("tok", "PNID", transport=t)
+        with pytest.raises(AdapterError, match="bad token"):
+            ad.send_message("911234567890", "hi")
+
+
+def _wa_cfg(**over):
+    from jarvis.channels.gateway import ChannelConfig as CC
+    base = dict(name="whatsapp", enabled=True, token="tok",
+                options={"phone_number_id": "PNID123"})
+    base.update(over)
+    return CC(**base)
+
+
+class TestWhatsAppFromConfig:
+    def test_builds_with_phone_number_id(self):
+        ad = WhatsAppCloudAdapter.from_config(_wa_cfg())
+        assert isinstance(ad, WhatsAppCloudAdapter)
+        assert ad.phone_number_id == "PNID123"
+        assert ad.webhook_port == 8080 and ad.webhook_path == "/webhook"
+        assert ad.verify_token                       # derived, 16 hex chars
+        assert len(ad.verify_token) == 16
+
+    def test_missing_phone_number_id_returns_none(self):
+        cfg = _wa_cfg(options={})
+        assert WhatsAppCloudAdapter.from_config(cfg) is None
+        assert WhatsAppCloudAdapter.from_config(_wa_cfg(token="")) is None
+
+    def test_bad_numbers_fall_back_safe(self):
+        ad = WhatsAppCloudAdapter.from_config(_wa_cfg(
+            options={"phone_number_id": "P", "webhook_port": "not-a-port",
+                     "chunk_limit": None}))
+        assert ad.webhook_port == 8080
+        assert ad.chunk_limit == 4000
+
+    def test_policy_verify_token_marks_the_note(self):
+        ad = WhatsAppCloudAdapter.from_config(_wa_cfg(
+            options={"phone_number_id": "P", "webhook_verify_token": "mytok"}))
+        assert ad.verify_token == "mytok"
+        assert "from policy" in "\n".join(ad.startup_notes())
+
+
+class TestOptionsPassthrough:
+    def test_unknown_keys_reach_options_known_do_not(self):
+        cfgs = load_channel_configs({"channels": {"whatsapp": {
+            "enabled": True, "lane": "peer", "phone_number_id": "P",
+            "app_secret": "s", "webhook_port": 8080, "mystery": 1}}})
+        cfg = cfgs[0]
+        assert cfg.options == {"phone_number_id": "P", "app_secret": "s",
+                               "webhook_port": 8080, "mystery": 1}
+
+    def test_typo_dialed_option_cannot_widen_known_fields(self):
+        # a typo like "lane" misspelled must not sneak into options AND
+        # must still fall back to the safe lane
+        cfgs = load_channel_configs({"channels": {"whatsapp": {
+            "laan": "root", "dm_polcy": "allowlist"}}})
+        cfg = cfgs[0]
+        assert cfg.lane == "peer" and cfg.dm_policy == "pairing"
+        assert set(cfg.options) == {"laan", "dm_polcy"}
+
+
+class TestWhatsAppWebhookServer:
+    def _adapter_and_loop(self, monkeypatch, **kw):
+        from jarvis.channels import whatsapp as wamod
+        monkeypatch.setattr(wamod, "WEBHOOK_PORT", 0)
+        ad = WhatsAppCloudAdapter("tok", "PNID", webhook_host="127.0.0.1",
+                                  webhook_port=0, **kw)
+        stop, got = threading.Event(), []
+        th = threading.Thread(target=ad.run_loop,
+                              args=(lambda m: got.append(m), stop), daemon=True)
+        th.start()
+        deadline = time.time() + 5
+        while ad.bound_port is None and time.time() < deadline:
+            time.sleep(0.01)
+        assert ad.bound_port, "webhook server never bound"
+        return ad, stop, th, got
+
+    def _post(self, port, payload, headers=None, path=WEBHOOK_PATH):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}", data=payload,
+            headers=headers or {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, r.read().decode()
+
+    def test_verify_handshake(self, monkeypatch):
+        ad, stop, th, _ = self._adapter_and_loop(monkeypatch)
+        try:
+            url = f"http://127.0.0.1:{ad.bound_port}/webhook"
+            q = f"?hub.mode=subscribe&hub.verify_token={ad.verify_token}&hub.challenge=424242"
+            with urllib.request.urlopen(url + q, timeout=5) as r:
+                assert r.read().decode() == "424242"
+            try:
+                urllib.request.urlopen(url + "?hub.mode=subscribe&"
+                                       "hub.verify_token=WRONG&hub.challenge=x",
+                                       timeout=5)
+                assert False, "wrong token must not verify"
+            except urllib.error.HTTPError as e:
+                assert e.code == 403
+        finally:
+            stop.set()
+            th.join(timeout=3)
+
+    def test_post_flows_dedupes_and_rejects_bad_signature(self, monkeypatch):
+        secret = "appsec"
+        ad, stop, th, got = self._adapter_and_loop(monkeypatch, app_secret=secret)
+        raw = _json.dumps(_wa_payload([_wa_text()])).encode()
+        sig = "sha256=" + hmac_mod.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+        try:
+            assert self._post(ad.bound_port, raw, {"X-Hub-Signature-256": sig})[0] == 200
+            deadline = time.time() + 5
+            while not got and time.time() < deadline:
+                time.sleep(0.01)
+            assert len(got) == 1 and got[0]["text"] == "hello jarvis"
+            # Meta redelivery: same message id -> spine stays quiet
+            self._post(ad.bound_port, raw, {"X-Hub-Signature-256": sig})
+            time.sleep(0.3)
+            assert len(got) == 1
+            # bad signature -> 403, nothing delivered
+            try:
+                self._post(ad.bound_port, raw, {"X-Hub-Signature-256": "sha256=" + "0" * 64})
+                assert False
+            except urllib.error.HTTPError as e:
+                assert e.code == 403
+            time.sleep(0.3)
+            assert len(got) == 1
+        finally:
+            stop.set()
+            th.join(timeout=3)
+
+    def test_dev_mode_accepts_unsigned(self, monkeypatch):
+        ad, stop, th, got = self._adapter_and_loop(monkeypatch)  # no app_secret
+        raw = _json.dumps(_wa_payload([_wa_text()])).encode()
+        try:
+            assert self._post(ad.bound_port, raw)[0] == 200
+            deadline = time.time() + 5
+            while not got and time.time() < deadline:
+                time.sleep(0.01)
+            assert len(got) == 1
+        finally:
+            stop.set()
+            th.join(timeout=3)
+
+
+class TestWhatsAppGatewayIntegration:
+    def test_factory_branch(self):
+        from jarvis.channels.gateway import _default_factory
+        assert isinstance(_default_factory(_wa_cfg()), WhatsAppCloudAdapter)
+        assert _default_factory(_wa_cfg(options={})) is None
+        assert _default_factory(_wa_cfg(name="signal")) is None
+
+    def test_unknown_wa_sender_gets_pairing_not_execution(self, tmp_path):
+        gw = ChannelGateway([_wa_cfg()], on_message=lambda *a: None,
+                            journal=Journal(str(tmp_path / "j.jsonl")),
+                            pairing_store=PairingStore(tmp_path / "pairing.jsonl"))
+        ad = WhatsAppCloudAdapter("tok", "PNID", transport=lambda *a: {})
+        sends = []
+        ad.send_message = lambda chat, text, reply_to=None: sends.append(text) or 1
+        gw.adapters["whatsapp"] = ad
+        msg = normalize_webhook(_wa_payload([_wa_text()]))[0]
+        gw.handle_update(_wa_cfg(), msg)
+        assert len(sends) == 1 and "pairing" in sends[0].lower()
+        # and the message never reached the spine
+        assert gw.dm_session("whatsapp", msg["sender_id"]) is None
+
+    def test_allowed_wa_sender_reaches_spine(self, tmp_path):
+        seen = []
+        cfg = _wa_cfg(allow_from=frozenset({"911234567890"}))
+        gw = ChannelGateway([cfg], on_message=lambda *a: seen.append(a),
+                            journal=Journal(str(tmp_path / "j.jsonl")))
+        msg = normalize_webhook(_wa_payload([_wa_text()]))[0]
+        gw.handle_update(cfg, msg)
+        assert len(seen) == 1
+        assert seen[0][2] == "911234567890"          # peer_id
+        assert seen[0][4] == "policy"                # admission reason

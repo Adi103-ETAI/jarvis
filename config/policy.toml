@@ -135,6 +135,31 @@ relay = "off"              # off | subject — code notices + routine lines to y
 subject = ""               # YOUR numeric id (relay target); the relay is read-only
 # token = ""               # or JARVIS_TELEGRAM_TOKEN env, or token_file = "/path"
 
+[channels.whatsapp]
+# Official WhatsApp Business Cloud API (phase 8.1, decision D9) -- NOT the
+# Baileys/WhatsApp-Web reverse-engineered path OpenClaw uses (ToS ban risk,
+# Node-only; see docs/decisions.md D9). Setup: create a Meta app with the
+# WhatsApp product, copy the phone_number_id, mint a permanent access
+# token, then point Meta's webhook at this host (public HTTPS; a tunnel
+# like ngrok/cloudflared is fine for dev) with webhook_path below.
+enabled = false            # flip to true + credentials to go live
+lane = "peer"              # same law as Telegram: peer answers, observe records
+dm_policy = "pairing"      # unknown senders get a pairing code, console approves
+allow_from = []            # WhatsApp ids: country code + number, no plus, e.g. ["911234567890"]
+group_policy = "disabled"  # groups are record-only in v0 (same as Telegram)
+group_allow_from = []      # group jids look like "123-456@g.us"
+require_mention = true
+mention_patterns = ['\bjarvis\b']
+relay = "off"
+subject = ""               # YOUR WhatsApp id (relay target); read-only mouth
+# --- whatsapp dialect (adapter options; unknown keys ride in options)
+phone_number_id = ""       # Meta App > WhatsApp > API Setup (REQUIRED to start)
+webhook_port = 8080        # where Meta POSTs arrive; must be publicly reachable
+webhook_path = "/webhook"
+webhook_verify_token = ""  # optional; derived from the access token if empty
+app_secret = ""            # Meta App secret; SET IT to enforce X-Hub-Signature-256
+# token = ""               # or JARVIS_WHATSAPP_TOKEN env, or token_file = "/path"
+
 # MCP bridge (jarvis-mcp-gate): MCP tools raise no kernel permission
 # requests in 2.1.4, so the bridge carries the gate itself -- with the SAME
 # rules as native tools (user decision 2026-10-26). mutating_tool_matches

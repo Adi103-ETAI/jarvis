@@ -123,7 +123,9 @@ deterministic, auditable, reproducible — unless a decision revises D6).
 - **Phase 8 (OpenClaw):** messaging gateway + Telegram channel —
   pairing codes approved at the console, allowFrom as a policy stanza,
   mention-gated group recording, `dm:<channel>:<peer>` sessions,
-  read-only subject relay. See docs/phase8-gateway.md.
+  read-only subject relay. Phase 8.1 adds WhatsApp via the official
+  Cloud API (webhook receiver + Graph API sender; Baileys refused, D9).
+  See docs/phase8-gateway.md.
 
 ## Standing prerequisites (not phase-numbered)
 

@@ -8,6 +8,8 @@ A/B) keeps the only path to the kernel. See docs/phase8-gateway.md.
 from jarvis.channels.gateway import (ChannelConfig, ChannelGateway,
                                      PairingStore, load_channel_configs)
 from jarvis.channels.telegram import AdapterError, TelegramAdapter
+from jarvis.channels.whatsapp import WhatsAppCloudAdapter
 
 __all__ = ["ChannelConfig", "ChannelGateway", "PairingStore",
-           "load_channel_configs", "AdapterError", "TelegramAdapter"]
+           "load_channel_configs", "AdapterError", "TelegramAdapter",
+           "WhatsAppCloudAdapter"]

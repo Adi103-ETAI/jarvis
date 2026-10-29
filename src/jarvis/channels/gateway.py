@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from jarvis.channels.telegram import TelegramAdapter
+from jarvis.channels.whatsapp import WhatsAppCloudAdapter
 
 # OpenClaw's pairing-code shape: 8 chars, uppercase, no ambiguous 0O1I.
 PAIRING_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -72,6 +73,9 @@ class ChannelConfig:
     subject: str = ""              # the subject's own peer id (relay target)
     token: str = ""
     poll_timeout: float = 25.0
+    options: dict = field(default_factory=dict)  # channel-specific keys
+    # (whatsapp: phone_number_id, app_secret, webhook_*; adapters own
+    # their options with safe fallbacks — the gateway never reads them)
 
 
 def _one_of(value, choices, default, safe, note=None, label=""):
@@ -96,6 +100,14 @@ def _compile_patterns(raw, note=None, label=""):
             if note is not None:
                 note(f"channel {label}: invalid mention pattern {p!r} skipped")
     return tuple(out)
+
+
+_KNOWN_CHANNEL_KEYS = frozenset({
+    "enabled", "lane", "dm_policy", "allow_from", "group_policy",
+    "group_allow_from", "require_mention", "mention_patterns",
+    "pairing_ttl_seconds", "max_pending_pairings", "relay", "subject",
+    "token", "token_file", "poll_timeout",
+})
 
 
 def load_channel_configs(raw: dict, journal=None, env=None) -> list[ChannelConfig]:
@@ -148,6 +160,10 @@ def load_channel_configs(raw: dict, journal=None, env=None) -> list[ChannelConfi
         except (TypeError, ValueError):
             cfg.poll_timeout = 25.0
         cfg.subject = str(body.get("subject", "") or "").strip()
+        # Unknown stanza keys are the channel's own dialect; they pass
+        # through untouched and each adapter applies safe fallbacks.
+        cfg.options = {k: v for k, v in body.items()
+                       if k not in _KNOWN_CHANNEL_KEYS}
 
         token = str(body.get("token", "") or "").strip()
         if not token:
@@ -350,10 +366,13 @@ class ChannelGateway:
             adapter = self._factory(cfg)
             if adapter is None:
                 self.journal.add("channel-config", channel=cfg.name,
-                                 note="enabled but no token — not started")
-                self.notify(f"[jarvis] channel {cfg.name} enabled but no token "
-                            "— set policy token / JARVIS_TELEGRAM_TOKEN")
+                                 note="enabled but credentials incomplete — not started")
+                self.notify(f"[jarvis] channel {cfg.name} enabled but not started "
+                            "— missing token/credentials "
+                            f"(JARVIS_{cfg.name.upper()}_TOKEN, docs/phase8-gateway.md)")
                 continue
+            for note in (getattr(adapter, "startup_notes", list)() or []):
+                self.journal.add("channel-config", channel=cfg.name, note=note)
             self.adapters[cfg.name] = adapter
             t = threading.Thread(target=self._poll_loop, args=(adapter, cfg),
                                  name=f"jarvis-channel-{cfg.name}", daemon=True)
@@ -431,10 +450,11 @@ class ChannelGateway:
         text = str(msg.get("text", ""))
         adapter = self.adapters.get(cfg.name)
         if adapter is not None:
-            if adapter.bot_id and msg.get("reply_to_sender_id") == adapter.bot_id:
+            bot_id = getattr(adapter, "bot_id", None)
+            bot_name = getattr(adapter, "bot_username", None)
+            if bot_id and msg.get("reply_to_sender_id") == bot_id:
                 return True
-            if adapter.bot_username and \
-                    f"@{adapter.bot_username}".lower() in text.lower():
+            if bot_name and f"@{bot_name}".lower() in text.lower():
                 return True
         return any(rx.search(text) for rx in cfg.mention_patterns)
 
@@ -564,4 +584,6 @@ class ChannelGateway:
 def _default_factory(cfg: ChannelConfig):
     if cfg.name == "telegram" and cfg.token:
         return TelegramAdapter(cfg.token, poll_timeout=cfg.poll_timeout)
+    if cfg.name == "whatsapp":
+        return WhatsAppCloudAdapter.from_config(cfg)
     return None
