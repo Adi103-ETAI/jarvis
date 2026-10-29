@@ -142,6 +142,10 @@ subject = ""               # YOUR numeric id (relay target); the relay is read-o
 # WhatsApp product, copy the phone_number_id, mint a permanent access
 # token, then point Meta's webhook at this host (public HTTPS; a tunnel
 # like ngrok/cloudflared is fine for dev) with webhook_path below.
+# COST: free on JARVIS's pattern -- answers ride Meta's free 24h service
+# window (peers message first); only business-initiated TEMPLATE sends
+# cost money. Keep relay = "off" here: proactive pushes outside the
+# window need paid templates -- Telegram carries notices for free.
 enabled = false            # flip to true + credentials to go live
 lane = "peer"              # same law as Telegram: peer answers, observe records
 dm_policy = "pairing"      # unknown senders get a pairing code, console approves

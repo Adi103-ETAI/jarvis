@@ -209,6 +209,13 @@ one HTTPS POST (Graph API) to send, one webhook to receive.
   dev) → subscribe Meta to the callback URL with the verify token →
   set `app_secret` so signatures are enforced (startup notes journal
   the dev-mode warning until you do).
+- What it costs: **nothing on JARVIS's traffic pattern**. Cloud API
+  access is free; per-message pricing (since 2025-07) applies only to
+  business-initiated TEMPLATE messages. Peers message first, answers
+  ride the free 24h service window, and Meta's dev test number is
+  free (5 verified recipients). The one costly feature is the
+  proactive relay outside the window — keep `relay = "off"` here and
+  let Telegram carry notices (free without asterisks).
 - Honest v0 limits: text only (media/template/interactive dropped),
   quoted-reply context unparsed, group sends best-effort, webhook
   requires a public HTTPS endpoint.

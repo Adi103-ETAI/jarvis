@@ -188,3 +188,33 @@ link is ever genuinely required, the honest form is a Baileys sidecar
 treated as untrusted dumb transport — adapter contract only, zero
 JARVIS logic, policy-gated like any channel. That is a deliberate
 future edit, never a default.
+
+### D9 addendum (2026-10-29, same day): the kernel is TS too, and Hermes' "free WhatsApp" checked
+
+Two follow-ups, answered before they blur the decision.
+
+**"Our OpenCode is also Node/TypeScript — doesn't that break D9?"**
+No, because D9 governs where JARVIS makes trust decisions, not which
+languages exist in the system. The rings differ: OpenCode is a PINNED
+DEPENDENCY — fixed version (v2.1.4), locked HTTP surface
+(opencode-api.lock.json), consumed over loopback; we import nothing
+from it, extend nothing in it, and Gate A/B stand between it and the
+host. Adopting OpenClaw/Hermes as a base would instead move foreign
+code INSIDE the boundary — the gateway, admission, sessions — with an
+npm tree behind it. Using a TS kernel is using infrastructure; basing
+the active layer on TS is surrendering the audit. A C program may link
+SQLite without being written in C.
+
+**"Hermes has a free WhatsApp — can we copy it?"** Checked the source
+(hermes-agent docs, 2026-10-29): Hermes' free WhatsApp is a **Baileys
+bridge** — the same WhatsApp-Web emulation OpenClaw uses. Unofficial,
+Node.js-only, and their own docs admit "small risk of account
+restrictions" and "may need re-pairing after protocol updates"; those
+docs themselves recommend the official Cloud API for business use. So
+there is no free-and-official design to copy — only the same one D9
+refused. Meanwhile the official path's actual cost on JARVIS's traffic
+pattern is zero: Cloud API access is free, service (user-initiated)
+traffic inside the 24h window is free, Meta's dev test number is free
+(5 verified recipients), and only business-initiated TEMPLATE sends
+cost money. Consequence: the WhatsApp relay stays "off" — proactive
+notices ride Telegram, which is free without asterisks.
