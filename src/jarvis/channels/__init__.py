@@ -9,7 +9,8 @@ from jarvis.channels.gateway import (ChannelConfig, ChannelGateway,
                                      PairingStore, load_channel_configs)
 from jarvis.channels.telegram import AdapterError, TelegramAdapter
 from jarvis.channels.whatsapp import WhatsAppCloudAdapter
+from jarvis.channels.whatsapp_bridge import WhatsAppBridgeAdapter
 
 __all__ = ["ChannelConfig", "ChannelGateway", "PairingStore",
            "load_channel_configs", "AdapterError", "TelegramAdapter",
-           "WhatsAppCloudAdapter"]
+           "WhatsAppCloudAdapter", "WhatsAppBridgeAdapter"]

@@ -157,7 +157,12 @@ mention_patterns = ['\bjarvis\b']
 relay = "off"
 subject = ""               # YOUR WhatsApp id (relay target); read-only mouth
 # --- whatsapp dialect (adapter options; unknown keys ride in options)
-phone_number_id = ""       # Meta App > WhatsApp > API Setup (REQUIRED to start)
+# transport = "cloud"      # "cloud" = official Cloud API (default) |
+#                          # "bridge" = Baileys sidecar (D9 escape hatch:
+#                          # needs node + `npm install` in sidecar/whatsapp/;
+#                          # first start prints a QR to scan; other bridge
+#                          # knobs: bridge_script, node_bin, bridge_auth_dir)
+phone_number_id = ""       # Meta App > WhatsApp > API Setup (cloud mode only)
 webhook_port = 8080        # where Meta POSTs arrive; must be publicly reachable
 webhook_path = "/webhook"
 webhook_verify_token = ""  # optional; derived from the access token if empty

@@ -893,3 +893,202 @@ class TestWhatsAppGatewayIntegration:
         assert len(seen) == 1
         assert seen[0][2] == "911234567890"          # peer_id
         assert seen[0][4] == "policy"                # admission reason
+
+
+# -------------------------------------------- whatsapp bridge sidecar (8.2)
+
+import io
+
+from jarvis.channels.whatsapp_bridge import (DEFAULT_BRIDGE_SCRIPT,
+                                             WhatsAppBridgeAdapter,
+                                             normalize_bridge_message)
+
+
+class FakeBridgeProc:
+    """A bridge process that streams scripted lines, then goes quiet
+    until terminated (like the real one blocked on its socket)."""
+
+    def __init__(self, lines, poll_result=None):
+        self._lines = [str(l) + "\n" for l in lines]
+        self.stdin = io.StringIO()
+        outer = self
+        def _gen():
+            for l in self._lines:
+                yield l
+            while not outer.terminated:
+                time.sleep(0.005)
+        self.stdout = _gen()
+        self.terminated = False
+        self._poll = poll_result
+        self.pid = 4242
+
+    def poll(self):
+        return self._poll
+
+    def terminate(self):
+        self.terminated = True
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def _line(obj):
+    return _json.dumps(obj)
+
+
+def _bridge_msg(mid="wamid.B1", chat="911234567890", sender=None,
+                text="hi from the bridge", chat_type="private", name="Adi"):
+    sender = sender or chat
+    return _line({"type": "message", "message": {
+        "update_id": None, "message_id": mid, "chat_id": chat,
+        "chat_type": chat_type, "sender_id": sender, "sender_name": name,
+        "text": text, "reply_to_sender_id": None, "date": 1699999999}})
+
+
+class TestBridgeNormalize:
+    def test_sane_message_passes(self):
+        m = normalize_bridge_message(_json.loads(_bridge_msg())["message"])
+        assert m["chat_id"] == "911234567890"
+        assert m["chat_type"] == "private"
+        assert m["sender_name"] == "Adi"
+        assert m["date"] == 1699999999
+
+    def test_group_suffix_wins_over_claimed_type(self):
+        raw = _json.loads(_bridge_msg(chat="123-456@g.us",
+                                      chat_type="private"))["message"]
+        assert normalize_bridge_message(raw)["chat_type"] == "group"
+
+    def test_garbage_is_refused(self):
+        assert normalize_bridge_message({}) is None
+        assert normalize_bridge_message({"text": " ", "chat_id": "1",
+                                         "sender_id": "1"}) is None
+        assert normalize_bridge_message("not a dict") is None
+        raw = _json.loads(_bridge_msg())["message"]
+        raw["date"] = "1699999999"                  # bridge must send ints
+        assert normalize_bridge_message(raw)["date"] is None
+
+    def test_name_truncated(self):
+        raw = _json.loads(_bridge_msg(name="N" * 300))["message"]
+        assert len(normalize_bridge_message(raw)["sender_name"]) == 80
+
+
+class TestBridgeFromConfig:
+    def test_cmd_shape_and_auth_dir(self):
+        cfg = _wa_cfg(options={"transport": "bridge",
+                               "bridge_auth_dir": "/tmp/wa-auth"})
+        ad = WhatsAppBridgeAdapter.from_config(cfg)
+        assert ad._cmd == ["node", str(DEFAULT_BRIDGE_SCRIPT),
+                           "--auth-dir", "/tmp/wa-auth"]
+        assert "UNTRUSTED" in "\n".join(ad.startup_notes())
+
+    def test_bad_numbers_fall_back_safe(self):
+        cfg = _wa_cfg(options={"transport": "bridge",
+                               "bridge_backoff_seconds": "wat",
+                               "chunk_limit": None})
+        ad = WhatsAppBridgeAdapter.from_config(cfg)
+        assert ad.backoff == 5.0
+        assert ad.chunk_limit == 4000
+
+
+class TestBridgeLifecycle:
+    def _run(self, procs, **kw):
+        box = list(procs)
+        def popen(*a, **kw2):
+            if not box:
+                raise FileNotFoundError("node missing")
+            return box.pop(0)
+        ad = WhatsAppBridgeAdapter(["node", "bridge.js"], backoff=0.05,
+                                   popen=popen, **kw)
+        stop, got = threading.Event(), []
+        th = threading.Thread(target=ad.run_loop, args=(got.append, stop),
+                              daemon=True)
+        th.start()
+        return ad, stop, th, got
+
+    def _wait(self, cond, timeout=5.0):
+        deadline = time.time() + timeout
+        while not cond() and time.time() < deadline:
+            time.sleep(0.01)
+        assert cond(), "condition never became true"
+
+    def test_routes_dedupes_and_tracks_send_errors(self):
+        lines = [
+            _line({"type": "status", "state": "starting"}),
+            _line({"type": "status", "state": "ready"}),
+            _bridge_msg(mid="wamid.A"),
+            _bridge_msg(mid="wamid.A"),                 # redelivery
+            _bridge_msg(mid="wamid.B"),
+            _line({"type": "sent", "id": 1, "ok": False,
+                   "error": "bridge is down"}),
+            "not json at all",
+        ]
+        ad, stop, th, got = self._run([FakeBridgeProc(lines)])
+        try:
+            self._wait(lambda: len(got) == 2)
+            assert ad.last_status == "ready"
+            assert [m["message_id"] for m in got] == ["wamid.A", "wamid.B"]
+            self._wait(lambda: len(ad.last_bridge_errors) == 1)
+            assert ad.last_bridge_errors[0] == "bridge is down"
+        finally:
+            stop.set()
+            th.join(timeout=3)
+        assert not th.is_alive()
+
+    def test_stop_terminates_the_child(self):
+        proc = FakeBridgeProc([_line({"type": "status", "state": "ready"})])
+        ad, stop, th, got = self._run([proc])
+        try:
+            self._wait(lambda: ad.last_status == "ready")
+        finally:
+            stop.set()
+            th.join(timeout=3)
+        assert proc.terminated
+
+    def test_spawn_failure_never_fatal(self):
+        ad, stop, th, got = self._run([])     # popen always raises
+        try:
+            self._wait(lambda: ad.last_status.startswith("spawn-failed"))
+            assert got == []
+        finally:
+            stop.set()
+            th.join(timeout=3)
+        assert not th.is_alive()
+
+
+class TestBridgeSend:
+    def test_chunks_into_json_lines(self):
+        proc = FakeBridgeProc([])
+        ad = WhatsAppBridgeAdapter(["node", "b"], popen=lambda *a, **kw: proc)
+        ad._proc = proc
+        n = ad.send_message("911234567890", "x" * 9000)
+        assert n == 3
+        lines = proc.stdin.getvalue().strip().splitlines()
+        assert len(lines) == 3
+        first = _json.loads(lines[0])
+        assert first["type"] == "send"
+        assert first["to"] == "911234567890"
+        assert first["id"] == 1
+        assert all(len(_json.loads(l)["text"]) <= 4000 for l in lines)
+        assert len({_json.loads(l)["id"] for l in lines}) == 3   # unique ids
+
+    def test_dead_bridge_raises_adapter_error(self):
+        proc = FakeBridgeProc([], poll_result=1)
+        ad = WhatsAppBridgeAdapter(["node", "b"], popen=lambda *a, **kw: proc)
+        with pytest.raises(AdapterError, match="not running"):
+            ad.send_message("911234567890", "hi")
+        ad._proc = proc
+        with pytest.raises(AdapterError, match="not running"):
+            ad.send_message("911234567890", "hi")
+
+
+class TestBridgeFactoryRouting:
+    def test_transport_option_routes(self):
+        from jarvis.channels.gateway import _default_factory
+        # no transport key -> official cloud path (safe default)
+        assert isinstance(_default_factory(_wa_cfg()), WhatsAppCloudAdapter)
+        # explicit bridge -> sidecar client
+        br = _default_factory(_wa_cfg(options={"transport": "bridge"}))
+        assert isinstance(br, WhatsAppBridgeAdapter)
+        # typo -> falls back to the official path, never the bridge
+        typo = _wa_cfg(options={"transport": "brdge", "phone_number_id": "P"})
+        assert isinstance(_default_factory(typo), WhatsAppCloudAdapter)

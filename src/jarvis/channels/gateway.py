@@ -32,6 +32,7 @@ from pathlib import Path
 
 from jarvis.channels.telegram import TelegramAdapter
 from jarvis.channels.whatsapp import WhatsAppCloudAdapter
+from jarvis.channels.whatsapp_bridge import WhatsAppBridgeAdapter
 
 # OpenClaw's pairing-code shape: 8 chars, uppercase, no ambiguous 0O1I.
 PAIRING_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -585,5 +586,12 @@ def _default_factory(cfg: ChannelConfig):
     if cfg.name == "telegram" and cfg.token:
         return TelegramAdapter(cfg.token, poll_timeout=cfg.poll_timeout)
     if cfg.name == "whatsapp":
+        # transport = "cloud" (official Cloud API, default) | "bridge"
+        # (Baileys sidecar, D9 escape hatch). Anything but "bridge" —
+        # typos included — falls back to the official path.
+        transport = str((cfg.options or {}).get("transport", "cloud")
+                        or "cloud").strip().lower()
+        if transport == "bridge":
+            return WhatsAppBridgeAdapter.from_config(cfg)
         return WhatsAppCloudAdapter.from_config(cfg)
     return None

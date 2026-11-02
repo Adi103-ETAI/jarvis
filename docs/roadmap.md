@@ -124,8 +124,10 @@ deterministic, auditable, reproducible — unless a decision revises D6).
   pairing codes approved at the console, allowFrom as a policy stanza,
   mention-gated group recording, `dm:<channel>:<peer>` sessions,
   read-only subject relay. Phase 8.1 adds WhatsApp via the official
-  Cloud API (webhook receiver + Graph API sender; Baileys refused, D9).
-  See docs/phase8-gateway.md.
+  Cloud API (webhook receiver + Graph API sender; Baileys refused as a
+  code base, D9). Phase 8.2 adds the operator-approved Baileys sidecar
+  (D9 escape hatch, sandboxed dumb transport on stdio; `transport =
+  "cloud" | "bridge"`). See docs/phase8-gateway.md.
 
 ## Standing prerequisites (not phase-numbered)
 

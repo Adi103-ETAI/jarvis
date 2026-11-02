@@ -218,3 +218,32 @@ traffic inside the 24h window is free, Meta's dev test number is free
 (5 verified recipients), and only business-initiated TEMPLATE sends
 cost money. Consequence: the WhatsApp relay stays "off" — proactive
 notices ride Telegram, which is free without asterisks.
+
+### D9 amendment (2026-10-29, later): the operator chose the escape hatch — Baileys sidecar approved under its terms
+
+The operator weighed the trade-offs and chose the WhatsApp-Web path:
+"we will go with baileys bridge." D9 anticipated exactly this decision
+and pre-authorized it as a *deliberate edit* — the escape-hatch clause.
+The refusal in D9 stands as the DEFAULT (cloud remains the safe
+fallback for any typo); what changes is that the hatch is now built,
+under these terms, all visible:
+
+- **One process, one job.** `sidecar/whatsapp/bridge.js` (Node +
+  Baileys, deps pinned in package.json/package-lock.json) links ONE
+  WhatsApp account and pipes JSON lines on stdio. It listens on NO
+  port and contains ZERO JARVIS logic — no policy, no pairing, no
+  sessions, no trust. Trust decisions stay 100% in the Python rim.
+- **The rim distrusts it.** `whatsapp_bridge.py` parses bridge output
+  defensively (normalize/coerce/dedupe/serialize) and gives it the
+  same admission pipeline as every channel; a dead bridge respawns
+  with backoff — the rim never dies with it.
+- **Session keys stay in the sidecar dir** (`sidecar/whatsapp/auth/`,
+  gitignored); a logged-out session exits so the operator re-scans.
+- **Ban hygiene is policy, not hope.** Reply-only traffic inside real
+  conversations, no bulk, no broadcasts/status targets (the bridge
+  itself refuses them), dedicated number strongly recommended — the
+  same discipline Hermes' own docs prescribe. The account-ban risk is
+  the operator's accepted trade for a free, personal-number WhatsApp.
+- **Cloud API remains installed and switchable** (`transport = "cloud"`
+  | `"bridge"` in policy) — the official path is one config line away
+  if ban risk ever materializes.

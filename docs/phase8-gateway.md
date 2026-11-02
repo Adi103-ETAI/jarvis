@@ -220,6 +220,39 @@ one HTTPS POST (Graph API) to send, one webhook to receive.
   quoted-reply context unparsed, group sends best-effort, webhook
   requires a public HTTPS endpoint.
 
+## Second channel, second transport: the Baileys bridge (phase 8.2)
+
+The operator chose the WhatsApp-Web path (D9 amendment): free, personal
+number, unofficial. D9's escape-hatch terms are now built — the bridge
+is a SANDBOXED DUMB TRANSPORT, never a second brain:
+
+- `sidecar/whatsapp/bridge.js` — Node + Baileys sidecar (deps pinned;
+  `npm ci` from the committed lockfile). Links ONE account, prints the
+  QR (terminal render + JSON line), persists session keys in
+  `sidecar/whatsapp/auth/` (gitignored), pipes JSON lines on stdio:
+  out = status / message / sent-ack; in = send commands. Zero JARVIS
+  logic inside; refuses broadcast/status targets by itself.
+- `src/jarvis/channels/whatsapp_bridge.py` — `WhatsAppBridgeAdapter`:
+  spawns and RESPAWNS the sidecar with backoff (rim never dies with
+  it), distrusts its output (`normalize_bridge_message` re-derives
+  every field — the group/private split is decided by the chat-id
+  suffix rim-side, whatever the bridge claims), dedupes redeliveries
+  by message id, serializes spine entry behind a lock, chunks sends at
+  4000, tracks send-ack errors. `popen` is injectable — the whole
+  lifecycle is tested hermetically.
+- Selection is policy: `[channels.whatsapp] transport = "cloud"`
+  (default) | `"bridge"`; anything but "bridge" — typos included —
+  falls back to the official Cloud API. The gateway factory routes;
+  admission, pairing, lanes, relay: identical for both transports.
+- Go-live: `cd sidecar/whatsapp && npm ci` → set
+  `transport = "bridge"`, `enabled = true` → start the console → scan
+  the QR with the number's phone → approve the first pairing at the
+  console (`channel approve whatsapp CODE`).
+- Honest v0 limits: text only, quoted context unparsed, send acks are
+  fire-and-forget (failures visible in `last_bridge_errors`), and the
+  account-ban risk is the operator's accepted trade (hygiene: reply-
+  only, no bulk, dedicated number).
+
 ## Acceptance (unit, all hermetic)
 
 - Adapter normalizes updates, advances the long-poll offset, chunks

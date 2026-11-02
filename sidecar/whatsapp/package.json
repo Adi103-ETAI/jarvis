@@ -1,0 +1,15 @@
+{
+  "name": "jarvis-whatsapp-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Untrusted WhatsApp-Web sidecar for JARVIS (D9 escape hatch): links one account, pipes JSON lines on stdio. Zero JARVIS logic inside.",
+  "main": "bridge.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "baileys": "^6.7.18",
+    "pino": "^9.4.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
